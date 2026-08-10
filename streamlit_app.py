@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from magic_write import MagicWriteModel, save_preview_images
 
@@ -26,9 +26,21 @@ def image_bytes_from_data_uri(data_uri: str) -> bytes:
 
 def preview_tile_bytes(image_data: bytes, width: int = 720, height: int = 360) -> bytes:
     image = Image.open(BytesIO(image_data)).convert("RGBA")
-    image.thumbnail((width - 56, height - 56), Image.Resampling.LANCZOS)
+    alpha_bbox = image.getchannel("A").getbbox()
+    if alpha_bbox:
+        image = image.crop(alpha_bbox)
 
-    tile = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    max_image_width = width - 72
+    max_image_height = height - 72
+    scale = min(max_image_width / image.width, max_image_height / image.height)
+    resized_size = (
+        max(1, int(round(image.width * scale))),
+        max(1, int(round(image.height * scale))),
+    )
+    image = image.resize(resized_size, Image.Resampling.LANCZOS)
+
+    tile = Image.new("RGBA", (width, height), (244, 246, 248, 255))
+    draw_tile_background(tile)
     x = (width - image.width) // 2
     y = (height - image.height) // 2
     tile.alpha_composite(image, (x, y))
@@ -36,6 +48,16 @@ def preview_tile_bytes(image_data: bytes, width: int = 720, height: int = 360) -
     output = BytesIO()
     tile.convert("RGB").save(output, format="PNG", optimize=True)
     return output.getvalue()
+
+
+def draw_tile_background(tile: Image.Image, cell_size: int = 24) -> None:
+    base = (244, 246, 248, 255)
+    alternate = (232, 236, 241, 255)
+    draw = ImageDraw.Draw(tile)
+    for y in range(0, tile.height, cell_size):
+        for x in range(0, tile.width, cell_size):
+            color = alternate if ((x // cell_size) + (y // cell_size)) % 2 else base
+            draw.rectangle((x, y, x + cell_size - 1, y + cell_size - 1), fill=color)
 
 
 def build_generation_kwargs(
