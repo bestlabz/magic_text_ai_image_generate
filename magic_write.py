@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,11 @@ LINUX_FONT_DIRS = [
     Path("/usr/share/fonts/truetype/dejavu"),
     Path("/usr/share/fonts/truetype/liberation2"),
     Path("/usr/share/fonts/truetype/liberation"),
+    Path("/usr/share/fonts/truetype/noto"),
+    Path("/usr/share/fonts/opentype/noto"),
+    Path("/usr/share/fonts"),
+    Path("/usr/local/share/fonts"),
+    Path.home() / ".local/share/fonts",
 ]
 
 FONT_FILES = {
@@ -99,6 +105,21 @@ FONT_FILES = {
     "snell roundhand": "SnellRoundhand.ttc",
     "brush script": "Brush Script.ttf",
     "chalkboard": "Chalkboard.ttc",
+}
+
+LINUX_FONT_FILE_FALLBACKS = {
+    "sans": {
+        False: ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "NotoSans-Regular.ttf"),
+        True: ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "NotoSans-Bold.ttf"),
+    },
+    "serif": {
+        False: ("DejaVuSerif.ttf", "LiberationSerif-Regular.ttf", "NotoSerif-Regular.ttf"),
+        True: ("DejaVuSerif-Bold.ttf", "LiberationSerif-Bold.ttf", "NotoSerif-Bold.ttf"),
+    },
+    "mono": {
+        False: ("DejaVuSansMono.ttf", "LiberationMono-Regular.ttf", "NotoSansMono-Regular.ttf"),
+        True: ("DejaVuSansMono-Bold.ttf", "LiberationMono-Bold.ttf", "NotoSansMono-Bold.ttf"),
+    },
 }
 
 CANVA_FONT_FAMILIES = [
@@ -2350,6 +2371,19 @@ def _download_google_font(family: str, bold: bool = False, italic: bool = False)
     return None
 
 
+@lru_cache(maxsize=256)
+def _find_installed_font_file(file_names: tuple[str, ...]) -> Path | None:
+    wanted = {name.lower() for name in file_names}
+    for font_dir in LINUX_FONT_DIRS:
+        if not font_dir.exists():
+            continue
+        for path in font_dir.rglob("*"):
+            if path.is_file() and path.name.lower() in wanted:
+                return path
+    return None
+
+
+@lru_cache(maxsize=256)
 def _system_font_path(family: str, bold: bool, allow_default: bool = True) -> Path | None:
     lowered = family.strip().lower()
     if bold and lowered in {"arial", "georgia"}:
@@ -2370,16 +2404,30 @@ def _system_font_path(family: str, bold: bool, allow_default: bool = True) -> Pa
                 MAC_CORE_FONT_DIR / "Helvetica.ttc",
             ]
         )
-    linux_sans = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
-    linux_serif = "DejaVuSerif-Bold.ttf" if bold else "DejaVuSerif.ttf"
-    linux_mono = "DejaVuSansMono-Bold.ttf" if bold else "DejaVuSansMono.ttf"
+    linux_sans = LINUX_FONT_FILE_FALLBACKS["sans"][bold][0]
+    linux_serif = LINUX_FONT_FILE_FALLBACKS["serif"][bold][0]
+    linux_mono = LINUX_FONT_FILE_FALLBACKS["mono"][bold][0]
     if "mono" in lowered or "courier" in lowered:
         candidates.extend(font_dir / linux_mono for font_dir in LINUX_FONT_DIRS)
     elif "serif" in lowered or lowered in {"georgia", "times new roman", "times new roman bold"}:
         candidates.extend(font_dir / linux_serif for font_dir in LINUX_FONT_DIRS)
     if allow_default:
         candidates.extend(font_dir / linux_sans for font_dir in LINUX_FONT_DIRS)
-    return next((p for p in candidates if p.exists()), None)
+    existing = next((p for p in candidates if p.exists()), None)
+    if existing:
+        return existing
+
+    if "mono" in lowered or "courier" in lowered:
+        font_kind = "mono"
+    elif "serif" in lowered or lowered in {"georgia", "times new roman", "times new roman bold"}:
+        font_kind = "serif"
+    else:
+        font_kind = "sans"
+
+    recursive_candidates = list(LINUX_FONT_FILE_FALLBACKS[font_kind][bold])
+    if allow_default and font_kind != "sans":
+        recursive_candidates.extend(LINUX_FONT_FILE_FALLBACKS["sans"][bold])
+    return _find_installed_font_file(tuple(recursive_candidates))
 
 
 def _load_font(family: str, size: float, weight: str | None = None, italic: bool = False) -> ImageFont.FreeTypeFont:

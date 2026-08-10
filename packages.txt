@@ -1,0 +1,4 @@
+fontconfig
+fonts-dejavu-core
+fonts-liberation2
+fonts-noto-core
