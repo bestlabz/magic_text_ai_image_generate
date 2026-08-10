@@ -10,7 +10,6 @@ PNG data URI for preview_image.
 from __future__ import annotations
 
 import base64
-import hashlib
 import io
 import json
 import math
@@ -25,7 +24,6 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -57,11 +55,14 @@ _load_local_env()
 DEFAULT_CANVAS_WIDTH = 420
 DEFAULT_CANVAS_HEIGHT = 420
 DEFAULT_PREVIEW_SCALE = 3
+DEFAULT_PREVIEW_OUTPUT_SCALE = 3
 LOCAL_MAGIC_WRITE_MODEL = "magic-write-local-rules-v1"
 MAGIC_WRITE_SAVED_MODEL_FORMAT = "magic-write-saved-model"
 MAGIC_WRITE_SAVED_MODEL_FORMAT_VERSION = 1
 MAGIC_WRITE_ML_MODEL_FORMAT = "magic-write-ml-naive-bayes"
 MAGIC_WRITE_ML_MODEL_FORMAT_VERSION = 1
+MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS = 9600
+MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES = 3200
 GOOGLE_FONTS_API_URL = "https://www.googleapis.com/webfonts/v1/webfonts"
 GOOGLE_FONTS_API_KEY = os.environ.get("GOOGLE_FONTS_API_KEY", "")
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -87,11 +88,6 @@ LINUX_FONT_DIRS = [
     Path("/usr/share/fonts/truetype/dejavu"),
     Path("/usr/share/fonts/truetype/liberation2"),
     Path("/usr/share/fonts/truetype/liberation"),
-    Path("/usr/share/fonts/truetype/noto"),
-    Path("/usr/share/fonts/opentype/noto"),
-    Path("/usr/share/fonts"),
-    Path("/usr/local/share/fonts"),
-    Path.home() / ".local/share/fonts",
 ]
 
 FONT_FILES = {
@@ -105,21 +101,6 @@ FONT_FILES = {
     "snell roundhand": "SnellRoundhand.ttc",
     "brush script": "Brush Script.ttf",
     "chalkboard": "Chalkboard.ttc",
-}
-
-LINUX_FONT_FILE_FALLBACKS = {
-    "sans": {
-        False: ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "NotoSans-Regular.ttf"),
-        True: ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "NotoSans-Bold.ttf"),
-    },
-    "serif": {
-        False: ("DejaVuSerif.ttf", "LiberationSerif-Regular.ttf", "NotoSerif-Regular.ttf"),
-        True: ("DejaVuSerif-Bold.ttf", "LiberationSerif-Bold.ttf", "NotoSerif-Bold.ttf"),
-    },
-    "mono": {
-        False: ("DejaVuSansMono.ttf", "LiberationMono-Regular.ttf", "NotoSansMono-Regular.ttf"),
-        True: ("DejaVuSansMono-Bold.ttf", "LiberationMono-Bold.ttf", "NotoSansMono-Bold.ttf"),
-    },
 }
 
 CANVA_FONT_FAMILIES = [
@@ -1385,10 +1366,6 @@ def _randomize_style_font(style: dict[str, Any], rng: random.Random, used_fonts:
 
 def _design_signature(style: dict[str, Any]) -> tuple[Any, ...]:
     return (
-        str(style.get("fontFamily") or ""),
-        str(style.get("fontWeight") or ""),
-        str(style.get("fontStyle") or ""),
-        round(float(style.get("fontSize") or 0), 2),
         str(style.get("fill") or ""),
         str(style.get("stroke") or ""),
         round(float(style.get("strokeWidth") or 0), 2),
@@ -1403,44 +1380,23 @@ def _design_signature(style: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _apply_indexed_font(style: dict[str, Any], index: int) -> dict[str, Any]:
-    varied = deepcopy(style)
-    pool = _normalize_font_families(_font_pool_for_style(varied))
-    if pool:
-        varied["fontFamily"] = pool[index % len(pool)]
-    kind = _font_kind(str(varied.get("fontFamily") or ""))
-    if kind == "script":
-        varied["fontWeight"] = "normal"
-        varied["fontStyle"] = "italic" if index % 2 else "normal"
-        varied["letterSpacing"] = min(float(varied.get("letterSpacing") or 0), 0.4)
-    elif kind in {"display", "mono", "decorative"}:
-        varied["fontWeight"] = "bold"
-        varied["fontStyle"] = "normal"
-        varied["letterSpacing"] = max(float(varied.get("letterSpacing") or 0), 0.6 + (index % 4) * 0.25)
-    elif kind == "serif":
-        varied["fontStyle"] = "italic" if index % 3 == 0 else "normal"
-        varied["letterSpacing"] = max(float(varied.get("letterSpacing") or 0), 0.2 + (index % 5) * 0.2)
-    return varied
-
-
-def _apply_indexed_design(style: dict[str, Any], index: int) -> dict[str, Any]:
-    varied = deepcopy(style)
-    palette = DESIGN_PALETTES[index % len(DESIGN_PALETTES)]
-    effect = DESIGN_EFFECTS[(index // len(DESIGN_PALETTES)) % len(DESIGN_EFFECTS)]
-    varied.update(palette)
-    stroke = _clean_hex(varied.get("stroke"), "")
-    varied["stroke"] = stroke
-    varied["strokeWidth"] = float(effect["strokeWidth"]) if stroke else 0
-    shadow = _clean_hex(varied.get("shadowColor"), "")
-    varied["shadowColor"] = shadow
-    varied["shadowBlur"] = float(effect["shadowBlur"]) if shadow else 0
-    varied["shadowOffsetX"] = float(effect["shadowOffsetX"]) if shadow else 0
-    varied["shadowOffsetY"] = float(effect["shadowOffsetY"]) if shadow else 0
-    varied["textDecoration"] = effect["textDecoration"]
-    varied["letterSpacing"] = float(varied.get("letterSpacing") or 0) + float(effect["letterSpacing"])
-    varied["rotation"] = 0 if str(varied.get("previewLayout") or "") in {"sale", "title_heading", "coming_soon", "signature", "glow_signature", "arc"} else float(effect["rotation"])
-    varied["name"] = f"{varied.get('name', 'style')}_{effect['suffix']}_{index + 1}"
-    return varied
+def _style_visual_signature(style: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(style.get("fontFamily") or "").strip().lower(),
+        str(style.get("fontWeight") or "").strip().lower(),
+        str(style.get("fontStyle") or "").strip().lower(),
+        str(style.get("fill") or "").strip().lower(),
+        str(style.get("stroke") or "").strip().lower(),
+        round(float(style.get("strokeWidth") or 0), 1),
+        str(style.get("shadowColor") or "").strip().lower(),
+        round(float(style.get("shadowBlur") or 0), 1),
+        round(float(style.get("shadowOffsetX") or 0), 1),
+        round(float(style.get("shadowOffsetY") or 0), 1),
+        round(float(style.get("letterSpacing") or 0), 1),
+        round(float(style.get("rotation") or 0), 1),
+        str(style.get("previewLayout") or "stacked").strip().lower(),
+        str(style.get("textTransform") or "none").strip().lower(),
+    )
 
 
 def _apply_random_design(style: dict[str, Any], rng: random.Random, index: int,
@@ -1832,155 +1788,55 @@ def _style_candidates(text: str, count: int, mood: str | None,
     return styles
 
 
-def _is_short_wordmark_text(text: str) -> bool:
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    if len(lines) != 1:
-        return False
-    words = re.findall(r"[A-Za-z0-9]+", lines[0])
-    return 1 <= len(words) <= 3 and len(lines[0]) <= 28
+def _ml_variant_style(base_style: dict[str, Any], index: int) -> dict[str, Any]:
+    style = deepcopy(base_style)
+    base_name = re.sub(r"[^a-z0-9]+", "_", str(style.get("name") or "style").lower()).strip("_") or "style"
+    font_family = CANVA_FONT_FAMILIES[index % len(CANVA_FONT_FAMILIES)]
+    palette = DESIGN_PALETTES[index % len(DESIGN_PALETTES)]
+    effect = DESIGN_EFFECTS[(index * 3) % len(DESIGN_EFFECTS)]
+    category_base = str(style.get("category") or _font_kind(font_family) or "text")
+    subject = ML_SYNTHETIC_SUBJECTS[index % len(ML_SYNTHETIC_SUBJECTS)]
+    suffix = ML_SYNTHETIC_SUFFIXES[(index * 5) % len(ML_SYNTHETIC_SUFFIXES)] or "design"
+    style["name"] = f"{base_name}_ml_class_{index:04d}"
+    style["category"] = f"{category_base}_ml_style_{index:04d}"
+    style["fontFamily"] = font_family
+    style["fontSize"] = _clamp_number(float(style.get("fontSize") or 48) * (0.86 + (index % 13) * 0.025), 48, 28, 88)
+    style["fontWeight"] = "bold" if index % 3 else str(style.get("fontWeight") or "normal")
+    style["fontStyle"] = "italic" if _font_kind(font_family) == "script" or index % 11 == 0 else "normal"
+    style["fill"] = str(palette.get("fill") or style.get("fill") or "#111111")
+    style["stroke"] = str(palette.get("stroke") or "") if float(effect.get("strokeWidth") or 0) else ""
+    style["strokeWidth"] = float(effect.get("strokeWidth") or 0) if style["stroke"] else 0
+    style["shadowColor"] = str(palette.get("shadow") or "") if effect.get("shadowBlur") or effect.get("shadowOffsetX") or effect.get("shadowOffsetY") else ""
+    style["shadowBlur"] = float(effect.get("shadowBlur") or 0) if style["shadowColor"] else 0
+    style["shadowOffsetX"] = float(effect.get("shadowOffsetX") or 0) if style["shadowColor"] else 0
+    style["shadowOffsetY"] = float(effect.get("shadowOffsetY") or 0) if style["shadowColor"] else 0
+    style["letterSpacing"] = _clamp_number(float(style.get("letterSpacing") or 0) + (index % 9) * 0.18, 0, -1, 3)
+    style["lineHeight"] = _clamp_number(float(style.get("lineHeight") or 0.9), 0.9, 0.7, 1.2)
+    style["textTransform"] = ["none", "title", "upper"][index % 3]
+    style["sample"] = f"{subject} {base_name} {suffix} mlclass{index:04d}"
+    return style
 
 
-def _short_wordmark_candidates(count: int) -> list[dict[str, Any]]:
-    featured_styles = [
-        {"name": "modern_cutout_teal", "fontFamily": "Arial", "fontSize": 62, "fontWeight": "bold", "fontStyle": "normal", "fill": "#FFFFFF", "stroke": "#139B83", "strokeWidth": 2.4, "shadowColor": "#0E6E5E", "shadowBlur": 0, "shadowOffsetX": 2.2, "shadowOffsetY": 2.8, "letterSpacing": 0.4, "lineHeight": 0.92, "textTransform": "upper", "category": "modern_wordmark cutout"},
-        {"name": "modern_gold_serif", "fontFamily": "Georgia", "fontSize": 62, "fontWeight": "bold", "fontStyle": "normal", "fill": "#C99718", "stroke": "#FFF7D8", "strokeWidth": 0.9, "shadowColor": "#9C771E", "shadowBlur": 0, "shadowOffsetX": 1.2, "shadowOffsetY": 2.2, "letterSpacing": 0.6, "lineHeight": 0.9, "textTransform": "title", "category": "modern_wordmark luxury"},
-        {"name": "modern_pink_neon", "fontFamily": "Arial", "fontSize": 60, "fontWeight": "bold", "fontStyle": "normal", "fill": "#FF4FB3", "stroke": "#FF8AD7", "strokeWidth": 1.1, "shadowColor": "#C52783", "shadowBlur": 0, "shadowOffsetX": 0, "shadowOffsetY": 3.0, "letterSpacing": 0.4, "lineHeight": 0.92, "textTransform": "title", "category": "modern_wordmark neon"},
-        {"name": "modern_script_ink", "fontFamily": "Snell Roundhand", "fontSize": 74, "fontWeight": "bold", "fontStyle": "normal", "fill": "#101114", "stroke": "", "strokeWidth": 0, "shadowColor": "", "shadowBlur": 0, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 0, "lineHeight": 0.84, "textTransform": "title", "category": "modern_wordmark script"},
-        {"name": "modern_blue_pop", "fontFamily": "Arial", "fontSize": 62, "fontWeight": "bold", "fontStyle": "normal", "fill": "#23B7E5", "stroke": "#FFFFFF", "strokeWidth": 1.8, "shadowColor": "#FF7A22", "shadowBlur": 0, "shadowOffsetX": 3.0, "shadowOffsetY": 0, "letterSpacing": 0.2, "lineHeight": 0.94, "textTransform": "title", "category": "modern_wordmark pop"},
-        {"name": "modern_cream_red", "fontFamily": "Georgia", "fontSize": 58, "fontWeight": "bold", "fontStyle": "normal", "fill": "#F7E27A", "stroke": "#EF4E56", "strokeWidth": 1.3, "shadowColor": "#213547", "shadowBlur": 0, "shadowOffsetX": 1.8, "shadowOffsetY": 2.4, "letterSpacing": 0.5, "lineHeight": 0.9, "textTransform": "title", "category": "modern_wordmark editorial"},
-        {"name": "modern_lilac_outline", "fontFamily": "Chalkboard", "fontSize": 58, "fontWeight": "bold", "fontStyle": "normal", "fill": "#C084FC", "stroke": "#FFFFFF", "strokeWidth": 1.8, "shadowColor": "#6D28D9", "shadowBlur": 0, "shadowOffsetX": 1.4, "shadowOffsetY": 2.2, "letterSpacing": 0.2, "lineHeight": 0.94, "textTransform": "title", "category": "modern_wordmark playful"},
-        {"name": "modern_minimal_caps", "fontFamily": "Arial", "fontSize": 56, "fontWeight": "normal", "fontStyle": "normal", "fill": "#2A2D34", "stroke": "", "strokeWidth": 0, "shadowColor": "", "shadowBlur": 0, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 2.4, "lineHeight": 1.0, "textTransform": "upper", "category": "modern_wordmark minimal"},
-        {"name": "modern_soft_sticker", "fontFamily": "Arial", "fontSize": 60, "fontWeight": "bold", "fontStyle": "normal", "fill": "#FF6874", "stroke": "#FFFFFF", "strokeWidth": 2.8, "shadowColor": "#BFC6D1", "shadowBlur": 0, "shadowOffsetX": 2.2, "shadowOffsetY": 3.0, "letterSpacing": 0.2, "lineHeight": 0.92, "textTransform": "title", "category": "modern_wordmark sticker"},
-        {"name": "modern_signature_teal", "fontFamily": "Brush Script", "fontSize": 70, "fontWeight": "bold", "fontStyle": "normal", "fill": "#139B83", "stroke": "#DDFCF5", "strokeWidth": 0.8, "shadowColor": "#0E6E5E", "shadowBlur": 0, "shadowOffsetX": 1.4, "shadowOffsetY": 2.0, "letterSpacing": 0, "lineHeight": 0.86, "textTransform": "title", "category": "modern_wordmark signature"},
-        {"name": "modern_ruby_mint", "fontFamily": "Arial", "fontSize": 62, "fontWeight": "bold", "fontStyle": "normal", "fill": "#EF3F4F", "stroke": "#FFFFFF", "strokeWidth": 1.6, "shadowColor": "#199B72", "shadowBlur": 0, "shadowOffsetX": -2.4, "shadowOffsetY": 2.4, "letterSpacing": 0.3, "lineHeight": 0.92, "textTransform": "title", "category": "modern_wordmark contrast"},
-        {"name": "modern_charcoal_edge", "fontFamily": "Impact", "fontSize": 62, "fontWeight": "bold", "fontStyle": "normal", "fill": "#101114", "stroke": "#F9C74F", "strokeWidth": 0.8, "shadowColor": "#00A896", "shadowBlur": 0, "shadowOffsetX": 2.0, "shadowOffsetY": 2.5, "letterSpacing": 0.8, "lineHeight": 0.9, "textTransform": "upper", "category": "modern_wordmark edge"},
-    ]
-    font_profiles = [
-        {"family": "Arial", "size": 62, "weight": "bold", "style": "normal", "spacing": 0.1, "transform": "title"},
-        {"family": "Snell Roundhand", "size": 72, "weight": "bold", "style": "normal", "spacing": 0.0, "transform": "title"},
-        {"family": "Georgia", "size": 60, "weight": "bold", "style": "normal", "spacing": 0.3, "transform": "title"},
-        {"family": "Impact", "size": 66, "weight": "bold", "style": "normal", "spacing": 1.0, "transform": "upper"},
-        {"family": "Chalkboard", "size": 58, "weight": "bold", "style": "normal", "spacing": 0.2, "transform": "title"},
-        {"family": "Arial", "size": 58, "weight": "normal", "style": "normal", "spacing": 2.0, "transform": "upper"},
-        {"family": "Georgia", "size": 58, "weight": "normal", "style": "italic", "spacing": 0.4, "transform": "title"},
-        {"family": "Times New Roman", "size": 62, "weight": "bold", "style": "normal", "spacing": 0.6, "transform": "title"},
-        {"family": "Brush Script", "size": 68, "weight": "bold", "style": "normal", "spacing": 0.0, "transform": "title"},
-        {"family": "Courier New", "size": 50, "weight": "bold", "style": "normal", "spacing": 1.6, "transform": "upper"},
-    ]
-    palettes = [
-        {"fill": "#FFFFFF", "stroke": "#1E1E1E", "shadow": "#2AA8D8"},
-        {"fill": "#111111", "stroke": "", "shadow": ""},
-        {"fill": "#D6A51E", "stroke": "", "shadow": "#6B5110"},
-        {"fill": "#FF5A66", "stroke": "#FFFFFF", "shadow": "#2B2F38"},
-        {"fill": "#16A394", "stroke": "#FFFFFF", "shadow": "#0A5B53"},
-        {"fill": "#FF4FB3", "stroke": "#FFB4DE", "shadow": "#9C1C66"},
-        {"fill": "#FFFFFF", "stroke": "#2DADE3", "shadow": "#1D65C1"},
-        {"fill": "#F8F4E8", "stroke": "", "shadow": "#111827"},
-        {"fill": "#74F25A", "stroke": "#FFFFFF", "shadow": "#B56CD9"},
-        {"fill": "#23B7E5", "stroke": "", "shadow": "#FF7A22"},
-        {"fill": "#F7E27A", "stroke": "#EF4E56", "shadow": "#213547"},
-        {"fill": "#C084FC", "stroke": "#FFFFFF", "shadow": "#6D28D9"},
-        {"fill": "#2A2D34", "stroke": "#F9C74F", "shadow": "#00A896"},
-        {"fill": "#E63946", "stroke": "#FFFFFF", "shadow": "#457B9D"},
-        {"fill": "#00A896", "stroke": "#FFFFFF", "shadow": "#05668D"},
-        {"fill": "#264653", "stroke": "#E9C46A", "shadow": "#7A2929"},
-        {"fill": "#F4A261", "stroke": "#FFFFFF", "shadow": "#2A9D8F"},
-        {"fill": "#755CFF", "stroke": "#FFFFFF", "shadow": "#BFB7FF"},
-        {"fill": "#FFFFFF", "stroke": "#139B83", "shadow": "#0E6E5E"},
-        {"fill": "#101114", "stroke": "#FF4F61", "shadow": "#BFC6D1"},
-    ]
-    effects = [
-        {"name": "clean", "stroke_width": 0, "shadow_blur": 0, "shadow_x": 0, "shadow_y": 0},
-        {"name": "outline", "stroke_width": 1.6, "shadow_blur": 0, "shadow_x": 0, "shadow_y": 0},
-        {"name": "sticker", "stroke_width": 2.8, "shadow_blur": 0, "shadow_x": 2.4, "shadow_y": 3.0},
-        {"name": "offset_right", "stroke_width": 0.8, "shadow_blur": 0, "shadow_x": 3.2, "shadow_y": 0},
-        {"name": "offset_down", "stroke_width": 1.0, "shadow_blur": 0, "shadow_x": 0, "shadow_y": 3.2},
-        {"name": "offset_left", "stroke_width": 1.0, "shadow_blur": 0, "shadow_x": -3.0, "shadow_y": 2.4},
-        {"name": "lift", "stroke_width": 0, "shadow_blur": 0, "shadow_x": 1.6, "shadow_y": 2.2},
-        {"name": "heavy_outline", "stroke_width": 3.4, "shadow_blur": 0, "shadow_x": 0, "shadow_y": 0},
-        {"name": "edge", "stroke_width": 1.2, "shadow_blur": 0, "shadow_x": 1.5, "shadow_y": 0},
-        {"name": "block_shadow", "stroke_width": 0.8, "shadow_blur": 0, "shadow_x": 4.5, "shadow_y": 4.5},
-    ]
-
-    styles: list[dict[str, Any]] = []
-    used_families: set[tuple[Any, ...]] = set()
-
-    for featured in featured_styles:
-        if len(styles) >= count:
-            return styles
-        styles.append(deepcopy(featured))
-        used_families.add((
-            featured["fontFamily"],
-            featured["fontWeight"],
-            featured["fontStyle"],
-            featured["textTransform"],
-            featured["fill"],
-            featured["stroke"],
-            featured["shadowColor"],
-            featured["name"],
-        ))
-
-    total_combinations = len(font_profiles) * len(palettes) * len(effects)
-    cycle = 0
-    while len(styles) < count:
-        before_count = len(styles)
-        for combo_index in range(total_combinations):
-            font = font_profiles[(combo_index + cycle) % len(font_profiles)]
-            palette = palettes[((combo_index // len(font_profiles)) * 7 + cycle) % len(palettes)]
-            effect = effects[((combo_index // (len(font_profiles) * len(palettes))) * 3 + combo_index + cycle) % len(effects)]
-            stroke = palette["stroke"] if effect["stroke_width"] else ""
-            shadow = palette["shadow"] if effect["shadow_x"] or effect["shadow_y"] else ""
-            family_signature = (
-                font["family"],
-                font["weight"],
-                font["style"],
-                font["transform"],
-                palette["fill"],
-                stroke,
-                shadow,
-                effect["name"],
-                cycle,
-            )
-            if family_signature in used_families:
-                continue
-            used_families.add(family_signature)
-            styles.append({
-                "name": f"short_wordmark_{len(styles) + 1}_{effect['name']}",
-                "category": "short_wordmark modern unique visual_family",
-                "fontFamily": font["family"],
-                "fontSize": float(font["size"]) * (0.96 + (cycle % 5) * 0.025),
-                "fontWeight": font["weight"],
-                "fontStyle": font["style"],
-                "fill": palette["fill"],
-                "stroke": stroke,
-                "strokeWidth": float(effect["stroke_width"]) if stroke else 0,
-                "textDecoration": "",
-                "shadowColor": shadow,
-                "shadowBlur": 0,
-                "shadowOffsetX": float(effect["shadow_x"]) if shadow else 0,
-                "shadowOffsetY": float(effect["shadow_y"]) if shadow else 0,
-                "letterSpacing": float(font["spacing"]) + (cycle % 4) * 0.15,
-                "lineHeight": 0.9 if _font_kind(str(font["family"])) in {"display", "script", "serif"} else 0.96,
-                "textTransform": font["transform"],
-                "rotation": 0,
-            })
-            if len(styles) >= count:
-                return styles
-        if len(styles) == before_count:
-            break
-        cycle += 1
-    return styles
-
-
-def _ml_style_library() -> list[dict[str, Any]]:
+def _ml_style_library(target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES) -> list[dict[str, Any]]:
     styles: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for style in [*STYLE_PRESETS, *MODERN_MAGIC_WRITE_DATASET, *MODERN_TEXT_EXPORT_STYLES]:
+    base_styles = [*STYLE_PRESETS, *MODERN_MAGIC_WRITE_DATASET, *MODERN_TEXT_EXPORT_STYLES]
+    for style in base_styles:
         name = str(style.get("name") or "").strip()
         if not name or name in seen:
             continue
         seen.add(name)
         styles.append(deepcopy(style))
+    target_styles = max(int(target_styles), len(styles))
+    variant_index = 0
+    while len(styles) < target_styles:
+        variant = _ml_variant_style(base_styles[variant_index % len(base_styles)], len(styles))
+        name = str(variant.get("name") or "")
+        variant_index += 1
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        styles.append(variant)
     return styles
 
 
@@ -2104,29 +1960,41 @@ def _ml_synthetic_training_texts(style: dict[str, Any], target_count: int) -> li
     return generated
 
 
-def _ml_training_documents(target_documents: int = 3000) -> list[tuple[str, list[str]]]:
-    styles = _ml_style_library()
+def _ml_training_documents(
+    styles: list[dict[str, Any]],
+    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
+) -> list[tuple[str, list[str]]]:
+    target_documents = max(int(target_documents), len(styles) * 3)
+    per_style_texts: list[tuple[str, list[str]]] = []
+    per_style_extra = max(math.ceil(target_documents / max(len(styles), 1)), 4)
+    for style in styles:
+        label = str(style.get("name") or "")
+        texts: list[str] = []
+        seen: set[str] = set()
+        for text in [*_ml_style_training_texts(style), *_ml_synthetic_training_texts(style, per_style_extra)]:
+            if text and text not in seen:
+                seen.add(text)
+                texts.append(text)
+        per_style_texts.append((label, texts or [label]))
+
     raw_documents: list[tuple[str, str]] = []
-    for style in styles:
-        label = str(style.get("name") or "")
-        for text in _ml_style_training_texts(style):
-            raw_documents.append((label, text))
-
-    target_documents = max(int(target_documents), len(raw_documents))
-    per_style_extra = math.ceil((target_documents - len(raw_documents)) / max(len(styles), 1))
-    for style in styles:
-        label = str(style.get("name") or "")
-        for text in _ml_synthetic_training_texts(style, per_style_extra):
-            raw_documents.append((label, text))
-
-    raw_documents = raw_documents[:target_documents]
+    text_index = 0
+    while len(raw_documents) < target_documents:
+        for label, texts in per_style_texts:
+            raw_documents.append((label, texts[text_index % len(texts)]))
+            if len(raw_documents) >= target_documents:
+                break
+        text_index += 1
     return [(label, _ml_tokens(text)) for label, text in raw_documents]
 
 
-def train_magic_write_ml_model(target_documents: int = 3000) -> dict[str, Any]:
+def train_magic_write_ml_model(
+    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
+    target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES,
+) -> dict[str, Any]:
     """Train a lightweight text-to-style ML model from the bundled style dataset."""
-    styles = _ml_style_library()
-    documents = _ml_training_documents(target_documents)
+    styles = _ml_style_library(target_styles=target_styles)
+    documents = _ml_training_documents(styles, target_documents)
 
     vocabulary = sorted({token for _, tokens in documents for token in tokens})
     class_doc_counts: dict[str, int] = {}
@@ -2177,16 +2045,21 @@ def train_magic_write_ml_model(target_documents: int = 3000) -> dict[str, Any]:
             "documents": total_docs,
             "target_documents": target_documents,
             "styles": len(styles),
+            "target_styles": target_styles,
             "alpha": alpha,
         },
     }
 
 
-def save_magic_write_ml_model(path: str | os.PathLike[str], target_documents: int = 3000) -> Path:
+def save_magic_write_ml_model(
+    path: str | os.PathLike[str],
+    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
+    target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES,
+) -> Path:
     """Train and save the Magic Write ML model artifact."""
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    model = train_magic_write_ml_model(target_documents=target_documents)
+    model = train_magic_write_ml_model(target_documents=target_documents, target_styles=target_styles)
     if output_path.suffix.lower() == ".pkl":
         output_path.write_bytes(pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL))
     else:
@@ -2246,53 +2119,48 @@ def _ml_style_candidates(
     randomize_designs: bool,
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    if _is_short_wordmark_text(text) and not mood:
-        return _short_wordmark_candidates(count)
-
     model = load_magic_write_ml_model(ml_model_path)
-    predicted = predict_magic_write_styles(text, model, count=max(count, 1), mood=mood)
+    predicted = predict_magic_write_styles(
+        text,
+        model,
+        count=max(count * 4, count + 24, 1),
+        mood=mood,
+    )
     if not predicted:
         return _style_candidates(text, count, mood, randomize_fonts, randomize_designs, rng)
     used_fonts: set[str] = set()
     used_designs: set[tuple[Any, ...]] = set()
+    seen_visuals: set[tuple[Any, ...]] = set()
     styles: list[dict[str, Any]] = []
-    accepted_signatures: set[tuple[Any, ...]] = set()
     candidate_index = 0
-    max_candidates = max(count * 80, count + len(predicted) * 256)
-
+    max_candidates = max(count * 40, len(predicted) * 8)
     while len(styles) < count and candidate_index < max_candidates:
-        base_index = candidate_index % len(predicted)
-        cycle = candidate_index // len(predicted)
-        base = deepcopy(predicted[base_index])
-        style = _variant_from_preset(base, cycle)
+        base = deepcopy(predicted[candidate_index % len(predicted)])
+        style = _variant_from_preset(base, candidate_index // len(predicted))
         if randomize_fonts:
             style = _randomize_style_font(style, rng, used_fonts)
-        elif cycle:
-            style = _apply_indexed_font(style, base_index + cycle)
         if randomize_designs:
             style = _apply_random_design(style, rng, candidate_index, used_designs)
-        elif cycle:
-            style = _apply_indexed_design(style, base_index + cycle)
-        signature = _design_signature(style)
-        if signature not in accepted_signatures:
-            accepted_signatures.add(signature)
+        signature = _style_visual_signature(style)
+        if signature not in seen_visuals:
+            seen_visuals.add(signature)
             styles.append(style)
         candidate_index += 1
 
     if len(styles) < count:
-        fallback = _style_candidates(
+        for fallback in _style_candidates(
             text,
             count - len(styles),
             mood,
             randomize_fonts=True,
             randomize_designs=True,
             rng=rng,
-        )
-        for style in fallback:
-            signature = _design_signature(style)
-            if signature not in accepted_signatures:
-                accepted_signatures.add(signature)
-                styles.append(style)
+        ):
+            signature = _style_visual_signature(fallback)
+            if signature in seen_visuals:
+                continue
+            seen_visuals.add(signature)
+            styles.append(fallback)
             if len(styles) >= count:
                 break
     return styles
@@ -2371,19 +2239,6 @@ def _download_google_font(family: str, bold: bool = False, italic: bool = False)
     return None
 
 
-@lru_cache(maxsize=256)
-def _find_installed_font_file(file_names: tuple[str, ...]) -> Path | None:
-    wanted = {name.lower() for name in file_names}
-    for font_dir in LINUX_FONT_DIRS:
-        if not font_dir.exists():
-            continue
-        for path in font_dir.rglob("*"):
-            if path.is_file() and path.name.lower() in wanted:
-                return path
-    return None
-
-
-@lru_cache(maxsize=256)
 def _system_font_path(family: str, bold: bool, allow_default: bool = True) -> Path | None:
     lowered = family.strip().lower()
     if bold and lowered in {"arial", "georgia"}:
@@ -2404,30 +2259,16 @@ def _system_font_path(family: str, bold: bool, allow_default: bool = True) -> Pa
                 MAC_CORE_FONT_DIR / "Helvetica.ttc",
             ]
         )
-    linux_sans = LINUX_FONT_FILE_FALLBACKS["sans"][bold][0]
-    linux_serif = LINUX_FONT_FILE_FALLBACKS["serif"][bold][0]
-    linux_mono = LINUX_FONT_FILE_FALLBACKS["mono"][bold][0]
+    linux_sans = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    linux_serif = "DejaVuSerif-Bold.ttf" if bold else "DejaVuSerif.ttf"
+    linux_mono = "DejaVuSansMono-Bold.ttf" if bold else "DejaVuSansMono.ttf"
     if "mono" in lowered or "courier" in lowered:
         candidates.extend(font_dir / linux_mono for font_dir in LINUX_FONT_DIRS)
     elif "serif" in lowered or lowered in {"georgia", "times new roman", "times new roman bold"}:
         candidates.extend(font_dir / linux_serif for font_dir in LINUX_FONT_DIRS)
     if allow_default:
         candidates.extend(font_dir / linux_sans for font_dir in LINUX_FONT_DIRS)
-    existing = next((p for p in candidates if p.exists()), None)
-    if existing:
-        return existing
-
-    if "mono" in lowered or "courier" in lowered:
-        font_kind = "mono"
-    elif "serif" in lowered or lowered in {"georgia", "times new roman", "times new roman bold"}:
-        font_kind = "serif"
-    else:
-        font_kind = "sans"
-
-    recursive_candidates = list(LINUX_FONT_FILE_FALLBACKS[font_kind][bold])
-    if allow_default and font_kind != "sans":
-        recursive_candidates.extend(LINUX_FONT_FILE_FALLBACKS["sans"][bold])
-    return _find_installed_font_file(tuple(recursive_candidates))
+    return next((p for p in candidates if p.exists()), None)
 
 
 def _load_font(family: str, size: float, weight: str | None = None, italic: bool = False) -> ImageFont.FreeTypeFont:
@@ -3794,6 +3635,8 @@ def _draw_centered_line(
             shadow,
             stroke_width,
         )
+        if shadow_blur:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=shadow_blur))
         layer.alpha_composite(shadow_layer)
     _draw_text_with_spacing(layer, (x, y), text, font, fill, spacing, stroke, stroke_width)
     return line_w
@@ -3822,7 +3665,12 @@ def _fit_font_size_for_lines(
     return min_size
 
 
-def _trim_transparent_preview(img: Image.Image, scale: int, padding: int = 10) -> Image.Image:
+def _trim_transparent_preview(
+    img: Image.Image,
+    scale: int,
+    padding: int = 10,
+    output_scale: float = DEFAULT_PREVIEW_OUTPUT_SCALE,
+) -> Image.Image:
     rgba = img.convert("RGBA")
     alpha_bbox = rgba.getchannel("A").getbbox()
     if not alpha_bbox:
@@ -3835,7 +3683,13 @@ def _trim_transparent_preview(img: Image.Image, scale: int, padding: int = 10) -
     bottom = min(alpha_bbox[3] + pad, rgba.height)
     cropped = rgba.crop((left, top, right, bottom))
 
-    return cropped
+    source_scale = max(float(scale), 1.0)
+    retained_scale = min(max(float(output_scale), 1.0), source_scale)
+    target_width = max(1, int(round(cropped.width * retained_scale / source_scale)))
+    target_height = max(1, int(round(cropped.height * retained_scale / source_scale)))
+    if target_width == cropped.width and target_height == cropped.height:
+        return cropped
+    return cropped.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
 
 def _draw_arc_text(
@@ -4042,6 +3896,9 @@ def _draw_text_object_on_layer(img: Image.Image, obj: dict[str, Any], scale: int
                 shadow,
                 stroke_width,
             )
+        blur = float(obj.get("shadowBlur") or 0) * scale
+        if blur:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=blur))
         target.alpha_composite(shadow_layer)
 
     text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -4157,6 +4014,9 @@ def render_preview_data_uri(text_obj: dict[str, Any], canvas_width: int = DEFAUL
                 shadow,
                 stroke_width,
             )
+        blur = float(obj.get("shadowBlur") or 0) * scale
+        if blur:
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=blur))
         img.alpha_composite(shadow_layer)
 
     text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -4180,23 +4040,6 @@ def render_preview_data_uri(text_obj: dict[str, Any], canvas_width: int = DEFAUL
     out = io.BytesIO()
     img.save(out, format="PNG")
     return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
-
-
-def _preview_image_fingerprint(data_uri: str) -> str:
-    if "," not in data_uri:
-        return ""
-    try:
-        raw = base64.b64decode(data_uri.split(",", 1)[1])
-        image = Image.open(io.BytesIO(raw)).convert("RGBA")
-    except Exception:
-        return hashlib.sha256(data_uri.encode("utf-8", "ignore")).hexdigest()
-
-    image.thumbnail((96, 48), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (96, 48), (255, 255, 255, 0))
-    x = (canvas.width - image.width) // 2
-    y = (canvas.height - image.height) // 2
-    canvas.alpha_composite(image, (x, y))
-    return hashlib.sha256(canvas.tobytes()).hexdigest()
 
 
 FABRIC_JSON_VERSION = "5.3.0"
@@ -4747,7 +4590,6 @@ def generate_magic_write(
     )
     effective_seed = _resolve_generation_seed(seed)
     rng = _make_rng(effective_seed)
-    previews: list[dict[str, str]] | None = None
 
     if requested_count == 0:
         return {
@@ -4772,48 +4614,17 @@ def generate_magic_write(
         }
 
     if resolved_generation_mode == "ml":
-        target_count = requested_count or 6
-        objects = []
-        previews = []
-        preview_fingerprints: set[str] = set()
-        candidate_count = max(target_count * 2, target_count + 256)
-        max_candidate_count = min(max(target_count * 12, candidate_count), 10000)
-
-        while len(objects) < target_count and candidate_count <= max_candidate_count:
-            before_count = len(objects)
-            styles = _ml_style_candidates(
-                text,
-                candidate_count,
-                mood,
-                ml_model_path,
-                randomize_fonts,
-                randomize_designs,
-                rng,
-            )
-            for style in styles:
-                obj = _konva_text(
-                    text,
-                    style,
-                    z_index=len(objects) + 1,
-                    canvas_width=canvas_width,
-                    canvas_height=canvas_height,
-                )
-                preview_uri = render_preview_data_uri(
-                    obj,
-                    canvas_width=canvas_width,
-                    canvas_height=canvas_height,
-                )
-                fingerprint = _preview_image_fingerprint(preview_uri)
-                if fingerprint in preview_fingerprints:
-                    continue
-                preview_fingerprints.add(fingerprint)
-                objects.append(obj)
-                previews.append({"image": preview_uri})
-                if len(objects) >= target_count:
-                    break
-            if len(objects) == before_count:
-                break
-            candidate_count = min(candidate_count * 2, max_candidate_count + 1)
+        styles = _ml_style_candidates(
+            text,
+            requested_count or 6,
+            mood,
+            ml_model_path,
+            randomize_fonts,
+            randomize_designs,
+            rng,
+        )
+        objects = [_konva_text(text, style, z_index=index + 1, canvas_width=canvas_width, canvas_height=canvas_height)
+                   for index, style in enumerate(styles)]
     elif resolved_generation_mode == "modern_text":
         objects = _modern_text_objects(
             text,
@@ -4867,13 +4678,12 @@ def generate_magic_write(
         objects = [_konva_text(text, style, z_index=index + 1, canvas_width=canvas_width, canvas_height=canvas_height)
                    for index, style in enumerate(styles)]
     _assign_generation_text_ids(objects, effective_seed)
-    if previews is None:
-        previews = [
-            {
-                "image": render_preview_data_uri(obj, canvas_width=canvas_width, canvas_height=canvas_height),
-            }
-            for obj in objects
-        ]
+    previews = [
+        {
+            "image": render_preview_data_uri(obj, canvas_width=canvas_width, canvas_height=canvas_height),
+        }
+        for obj in objects
+    ]
     output_objects = _format_magic_write_objects(
         objects,
         normalized_output_format,

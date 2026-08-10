@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from magic_write import MagicWriteModel, save_preview_images
 
@@ -39,25 +39,19 @@ def preview_tile_bytes(image_data: bytes, width: int = 720, height: int = 360) -
     )
     image = image.resize(resized_size, Image.Resampling.LANCZOS)
 
-    tile = Image.new("RGBA", (width, height), (244, 246, 248, 255))
+    tile = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw_tile_background(tile)
     x = (width - image.width) // 2
     y = (height - image.height) // 2
     tile.alpha_composite(image, (x, y))
 
     output = BytesIO()
-    tile.convert("RGB").save(output, format="PNG", optimize=True)
+    tile.save(output, format="PNG", optimize=True)
     return output.getvalue()
 
 
-def draw_tile_background(tile: Image.Image, cell_size: int = 24) -> None:
-    base = (244, 246, 248, 255)
-    alternate = (232, 236, 241, 255)
-    draw = ImageDraw.Draw(tile)
-    for y in range(0, tile.height, cell_size):
-        for x in range(0, tile.width, cell_size):
-            color = alternate if ((x // cell_size) + (y // cell_size)) % 2 else base
-            draw.rectangle((x, y, x + cell_size - 1, y + cell_size - 1), fill=color)
+def draw_tile_background(tile: Image.Image) -> None:
+    tile.paste((0, 0, 0, 0), (0, 0, tile.width, tile.height))
 
 
 def build_generation_kwargs(
@@ -109,8 +103,8 @@ with st.sidebar:
     mood = ""
     seed_enabled = False
     seed = 12345
-    randomize_fonts = False
-    randomize_designs = False
+    randomize_fonts = True
+    randomize_designs = True
 
     generate_clicked = st.button("Generate", type="primary", use_container_width=True)
 
