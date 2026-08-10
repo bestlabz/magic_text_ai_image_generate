@@ -57,12 +57,8 @@ DEFAULT_CANVAS_HEIGHT = 420
 DEFAULT_PREVIEW_SCALE = 3
 DEFAULT_PREVIEW_OUTPUT_SCALE = 3
 LOCAL_MAGIC_WRITE_MODEL = "magic-write-local-rules-v1"
-MAGIC_WRITE_SAVED_MODEL_FORMAT = "magic-write-saved-model"
-MAGIC_WRITE_SAVED_MODEL_FORMAT_VERSION = 1
 MAGIC_WRITE_ML_MODEL_FORMAT = "magic-write-ml-naive-bayes"
 MAGIC_WRITE_ML_MODEL_FORMAT_VERSION = 1
-MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS = 9600
-MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES = 3200
 GOOGLE_FONTS_API_URL = "https://www.googleapis.com/webfonts/v1/webfonts"
 GOOGLE_FONTS_API_KEY = os.environ.get("GOOGLE_FONTS_API_KEY", "")
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -336,58 +332,6 @@ def get_magic_write_training_dataset() -> dict[str, Any]:
         "modern_composition_palettes": deepcopy(MODERN_COMPOSITION_PALETTES),
         "modern_composition_effects": deepcopy(MODERN_COMPOSITION_EFFECTS),
     }
-
-
-def save_magic_write_training_dataset(path: str | os.PathLike[str]) -> Path:
-    """Save the Magic Write trained dataset/configuration as JSON."""
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(get_magic_write_training_dataset(), indent=2),
-        encoding="utf-8",
-    )
-    return output_path
-
-
-def save_magic_write_model(
-    path: str | os.PathLike[str],
-    canvas_width: int = DEFAULT_CANVAS_WIDTH,
-    canvas_height: int = DEFAULT_CANVAS_HEIGHT,
-) -> Path:
-    """Save a portable Magic Write model artifact as JSON."""
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact = {
-        "format": MAGIC_WRITE_SAVED_MODEL_FORMAT,
-        "format_version": MAGIC_WRITE_SAVED_MODEL_FORMAT_VERSION,
-        "model": LOCAL_MAGIC_WRITE_MODEL,
-        "dataset_version": MAGIC_WRITE_DATASET_VERSION,
-        "canvas": {
-            "width": int(canvas_width),
-            "height": int(canvas_height),
-            "preview_scale": DEFAULT_PREVIEW_SCALE,
-        },
-        "dataset": get_magic_write_training_dataset(),
-    }
-    output_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
-    return output_path
-
-
-def load_magic_write_model(path: str | os.PathLike[str]) -> "MagicWriteModel":
-    """Load a saved Magic Write model artifact."""
-    model_path = Path(path)
-    artifact = json.loads(model_path.read_text(encoding="utf-8"))
-    if artifact.get("format") != MAGIC_WRITE_SAVED_MODEL_FORMAT:
-        raise ValueError(f"{model_path} is not a Magic Write saved model")
-    canvas = artifact.get("canvas") if isinstance(artifact.get("canvas"), dict) else {}
-    model = MagicWriteModel(
-        canvas_width=int(canvas.get("width") or DEFAULT_CANVAS_WIDTH),
-        canvas_height=int(canvas.get("height") or DEFAULT_CANVAS_HEIGHT),
-    )
-    dataset = artifact.get("dataset")
-    if isinstance(dataset, dict):
-        model.dataset = dataset
-    return model
 
 
 class MagicWriteModel:
@@ -1469,62 +1413,6 @@ def _apply_random_design(style: dict[str, Any], rng: random.Random, index: int,
     return selected
 
 
-def _canva_style_presets(count: int, randomize_fonts: bool = True,
-                         randomize_designs: bool = True,
-                         rng: random.Random | None = None) -> list[dict[str, Any]]:
-    rng = rng or _make_rng()
-    preset_order = _shuffle_copy(STYLE_PRESETS, rng) if randomize_fonts else STYLE_PRESETS[:]
-    used_fonts: set[str] = set()
-    used_designs: set[tuple[Any, ...]] = set()
-    styles: list[dict[str, Any]] = []
-    for index in range(count):
-        preset = preset_order[index % len(preset_order)]
-        style = _variant_from_preset(preset, index // len(preset_order))
-        if randomize_fonts:
-            style = _randomize_style_font(style, rng, used_fonts)
-        if randomize_designs:
-            style = _apply_random_design(style, rng, index, used_designs)
-        styles.append(style)
-    return styles
-
-
-def _modern_style_dataset(count: int | None = None, mood: str | None = None,
-                          randomize_fonts: bool = True,
-                          randomize_designs: bool = True,
-                          rng: random.Random | None = None) -> list[dict[str, Any]]:
-    rng = rng or _make_rng()
-    styles = [deepcopy(style) for style in MODERN_MAGIC_WRITE_DATASET]
-    mood_text = str(mood or "").lower()
-    if mood_text:
-        def score(style: dict[str, Any]) -> int:
-            haystack = " ".join(
-                str(style.get(key, ""))
-                for key in ("name", "category", "fontFamily", "sample", "previewLayout")
-            ).lower()
-            return sum(1 for token in re.findall(r"[a-z0-9]+", mood_text) if token in haystack)
-        styles.sort(key=score, reverse=True)
-    elif randomize_fonts:
-        rng.shuffle(styles)
-
-    if count is None:
-        selected = styles
-    else:
-        selected = []
-        for index in range(count):
-            style = deepcopy(styles[index % len(styles)])
-            if index >= len(styles):
-                style = _variant_from_preset(style, index // len(styles))
-            selected.append(style)
-
-    if randomize_fonts:
-        used_fonts: set[str] = set()
-        selected = [_randomize_style_font(style, rng, used_fonts) for style in selected]
-    if randomize_designs:
-        used_designs: set[tuple[Any, ...]] = set()
-        selected = [_apply_random_design(style, rng, index, used_designs) for index, style in enumerate(selected)]
-    return selected
-
-
 def _normalize_font_families(font_families: list[str] | tuple[str, ...] | str | None) -> list[str]:
     if font_families is None:
         return CANVA_FONT_FAMILIES[:]
@@ -1788,58 +1676,6 @@ def _style_candidates(text: str, count: int, mood: str | None,
     return styles
 
 
-def _ml_variant_style(base_style: dict[str, Any], index: int) -> dict[str, Any]:
-    style = deepcopy(base_style)
-    base_name = re.sub(r"[^a-z0-9]+", "_", str(style.get("name") or "style").lower()).strip("_") or "style"
-    font_family = CANVA_FONT_FAMILIES[index % len(CANVA_FONT_FAMILIES)]
-    palette = DESIGN_PALETTES[index % len(DESIGN_PALETTES)]
-    effect = DESIGN_EFFECTS[(index * 3) % len(DESIGN_EFFECTS)]
-    category_base = str(style.get("category") or _font_kind(font_family) or "text")
-    subject = ML_SYNTHETIC_SUBJECTS[index % len(ML_SYNTHETIC_SUBJECTS)]
-    suffix = ML_SYNTHETIC_SUFFIXES[(index * 5) % len(ML_SYNTHETIC_SUFFIXES)] or "design"
-    style["name"] = f"{base_name}_ml_class_{index:04d}"
-    style["category"] = f"{category_base}_ml_style_{index:04d}"
-    style["fontFamily"] = font_family
-    style["fontSize"] = _clamp_number(float(style.get("fontSize") or 48) * (0.86 + (index % 13) * 0.025), 48, 28, 88)
-    style["fontWeight"] = "bold" if index % 3 else str(style.get("fontWeight") or "normal")
-    style["fontStyle"] = "italic" if _font_kind(font_family) == "script" or index % 11 == 0 else "normal"
-    style["fill"] = str(palette.get("fill") or style.get("fill") or "#111111")
-    style["stroke"] = str(palette.get("stroke") or "") if float(effect.get("strokeWidth") or 0) else ""
-    style["strokeWidth"] = float(effect.get("strokeWidth") or 0) if style["stroke"] else 0
-    style["shadowColor"] = str(palette.get("shadow") or "") if effect.get("shadowBlur") or effect.get("shadowOffsetX") or effect.get("shadowOffsetY") else ""
-    style["shadowBlur"] = float(effect.get("shadowBlur") or 0) if style["shadowColor"] else 0
-    style["shadowOffsetX"] = float(effect.get("shadowOffsetX") or 0) if style["shadowColor"] else 0
-    style["shadowOffsetY"] = float(effect.get("shadowOffsetY") or 0) if style["shadowColor"] else 0
-    style["letterSpacing"] = _clamp_number(float(style.get("letterSpacing") or 0) + (index % 9) * 0.18, 0, -1, 3)
-    style["lineHeight"] = _clamp_number(float(style.get("lineHeight") or 0.9), 0.9, 0.7, 1.2)
-    style["textTransform"] = ["none", "title", "upper"][index % 3]
-    style["sample"] = f"{subject} {base_name} {suffix} mlclass{index:04d}"
-    return style
-
-
-def _ml_style_library(target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES) -> list[dict[str, Any]]:
-    styles: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    base_styles = [*STYLE_PRESETS, *MODERN_MAGIC_WRITE_DATASET, *MODERN_TEXT_EXPORT_STYLES]
-    for style in base_styles:
-        name = str(style.get("name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        styles.append(deepcopy(style))
-    target_styles = max(int(target_styles), len(styles))
-    variant_index = 0
-    while len(styles) < target_styles:
-        variant = _ml_variant_style(base_styles[variant_index % len(base_styles)], len(styles))
-        name = str(variant.get("name") or "")
-        variant_index += 1
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        styles.append(variant)
-    return styles
-
-
 def _ml_tokens(text: str) -> list[str]:
     normalized = str(text or "").lower()
     words = re.findall(r"[a-z0-9%]+", normalized)
@@ -1849,222 +1685,6 @@ def _ml_tokens(text: str) -> list[str]:
         padded = f"_{word}_"
         char_tokens.extend(padded[index:index + 3] for index in range(max(len(padded) - 2, 0)))
     return words + char_tokens + compact.split()
-
-
-def _ml_style_training_texts(style: dict[str, Any]) -> list[str]:
-    name = str(style.get("name") or "")
-    category = str(style.get("category") or "")
-    font = str(style.get("fontFamily") or "")
-    sample = str(style.get("sample") or "")
-    layout = str(style.get("previewLayout") or "")
-    transform = str(style.get("textTransform") or "")
-    font_kind = _font_kind(font)
-    base = " ".join([name, category, font, font_kind, sample, layout, transform])
-    texts = [base, sample, name.replace("_", " "), category.replace("_", " ")]
-    haystack = base.lower()
-    intent_examples = [
-        (("birthday", "party", "marker", "pop"), "happy birthday birthday party celebration"),
-        (("thank", "grateful"), "thank you thanks grateful appreciation"),
-        (("bride", "groom", "wedding", "love"), "wedding bride groom love engagement"),
-        (("sale", "discount", "condensed", "off"), "sale discount offer 30% off deal"),
-        (("neon", "glow", "open"), "neon glow open now night light"),
-        (("signature", "script"), "signature script handwritten love always"),
-        (("gold", "luxury", "serif"), "gold luxury premium elegant golden hour"),
-        (("studio", "badge", "tattoo", "arc"), "studio badge tattoo logo brand"),
-        (("roadmap", "target", "quarter", "mono"), "quarter roadmap targets business report"),
-        (("coming", "soon", "editorial"), "coming soon editorial announcement"),
-    ]
-    for needles, example in intent_examples:
-        if any(needle in haystack for needle in needles):
-            texts.extend([example, f"{example} {name} {category}"])
-    return [text for text in texts if text.strip()]
-
-
-ML_SYNTHETIC_PREFIXES = [
-    "",
-    "create",
-    "make",
-    "design",
-    "generate",
-    "modern",
-    "beautiful",
-    "bold",
-    "clean",
-    "premium",
-]
-
-ML_SYNTHETIC_SUBJECTS = [
-    "sparkle",
-    "happy birthday",
-    "thank you",
-    "wedding invite",
-    "bride groom",
-    "sale offer",
-    "new drop",
-    "coming soon",
-    "open now",
-    "studio logo",
-    "golden hour",
-    "love always",
-    "quarterly targets",
-    "roadmap",
-    "signature",
-    "party night",
-    "brand title",
-    "subscribe",
-]
-
-ML_SYNTHETIC_SUFFIXES = [
-    "",
-    "text",
-    "typography",
-    "lettering",
-    "poster text",
-    "transparent png",
-    "canvas design",
-    "headline",
-    "title",
-    "sticker",
-]
-
-
-def _ml_synthetic_training_texts(style: dict[str, Any], target_count: int) -> list[str]:
-    seed_text = " ".join(
-        str(style.get(key) or "")
-        for key in ("name", "category", "fontFamily", "sample", "previewLayout", "textTransform")
-    )
-    rng = random.Random(seed_text)
-    style_terms = [
-        term
-        for term in re.findall(r"[a-z0-9%]+", seed_text.lower())
-        if len(term) >= 3
-    ]
-    if not style_terms:
-        style_terms = ["text"]
-    generated: list[str] = []
-    seen: set[str] = set()
-    attempts = max(target_count * 8, 64)
-    for _ in range(attempts):
-        parts = [
-            rng.choice(ML_SYNTHETIC_PREFIXES),
-            rng.choice(ML_SYNTHETIC_SUBJECTS),
-            rng.choice(style_terms),
-            rng.choice(ML_SYNTHETIC_SUFFIXES),
-        ]
-        text = " ".join(part for part in parts if part).strip()
-        if text and text not in seen:
-            seen.add(text)
-            generated.append(text)
-            if len(generated) >= target_count:
-                break
-    return generated
-
-
-def _ml_training_documents(
-    styles: list[dict[str, Any]],
-    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
-) -> list[tuple[str, list[str]]]:
-    target_documents = max(int(target_documents), len(styles) * 3)
-    per_style_texts: list[tuple[str, list[str]]] = []
-    per_style_extra = max(math.ceil(target_documents / max(len(styles), 1)), 4)
-    for style in styles:
-        label = str(style.get("name") or "")
-        texts: list[str] = []
-        seen: set[str] = set()
-        for text in [*_ml_style_training_texts(style), *_ml_synthetic_training_texts(style, per_style_extra)]:
-            if text and text not in seen:
-                seen.add(text)
-                texts.append(text)
-        per_style_texts.append((label, texts or [label]))
-
-    raw_documents: list[tuple[str, str]] = []
-    text_index = 0
-    while len(raw_documents) < target_documents:
-        for label, texts in per_style_texts:
-            raw_documents.append((label, texts[text_index % len(texts)]))
-            if len(raw_documents) >= target_documents:
-                break
-        text_index += 1
-    return [(label, _ml_tokens(text)) for label, text in raw_documents]
-
-
-def train_magic_write_ml_model(
-    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
-    target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES,
-) -> dict[str, Any]:
-    """Train a lightweight text-to-style ML model from the bundled style dataset."""
-    styles = _ml_style_library(target_styles=target_styles)
-    documents = _ml_training_documents(styles, target_documents)
-
-    vocabulary = sorted({token for _, tokens in documents for token in tokens})
-    class_doc_counts: dict[str, int] = {}
-    class_token_counts: dict[str, dict[str, int]] = {}
-    class_total_tokens: dict[str, int] = {}
-    for label, tokens in documents:
-        class_doc_counts[label] = class_doc_counts.get(label, 0) + 1
-        token_counts = class_token_counts.setdefault(label, {})
-        for token in tokens:
-            token_counts[token] = token_counts.get(token, 0) + 1
-            class_total_tokens[label] = class_total_tokens.get(label, 0) + 1
-
-    alpha = 1.0
-    total_docs = len(documents)
-    vocabulary_size = max(len(vocabulary), 1)
-    labels = sorted(class_doc_counts)
-    class_log_prior: dict[str, float] = {}
-    feature_log_prob: dict[str, dict[str, float]] = {}
-    default_log_prob: dict[str, float] = {}
-    for label in labels:
-        class_log_prior[label] = math.log(class_doc_counts[label] / total_docs)
-        denominator = class_total_tokens.get(label, 0) + alpha * vocabulary_size
-        default_log_prob[label] = math.log(alpha / denominator)
-        token_counts = class_token_counts.get(label, {})
-        feature_log_prob[label] = {
-            token: math.log((token_counts.get(token, 0) + alpha) / denominator)
-            for token in vocabulary
-            if token_counts.get(token, 0)
-        }
-
-    style_lookup = {
-        str(style.get("name")): deepcopy(style)
-        for style in styles
-        if str(style.get("name") or "").strip()
-    }
-    return {
-        "format": MAGIC_WRITE_ML_MODEL_FORMAT,
-        "format_version": MAGIC_WRITE_ML_MODEL_FORMAT_VERSION,
-        "model_type": "multinomial_naive_bayes",
-        "dataset_version": MAGIC_WRITE_DATASET_VERSION,
-        "labels": labels,
-        "vocabulary": vocabulary,
-        "class_log_prior": class_log_prior,
-        "feature_log_prob": feature_log_prob,
-        "default_log_prob": default_log_prob,
-        "style_lookup": style_lookup,
-        "training": {
-            "documents": total_docs,
-            "target_documents": target_documents,
-            "styles": len(styles),
-            "target_styles": target_styles,
-            "alpha": alpha,
-        },
-    }
-
-
-def save_magic_write_ml_model(
-    path: str | os.PathLike[str],
-    target_documents: int = MAGIC_WRITE_ML_DEFAULT_TARGET_DOCUMENTS,
-    target_styles: int = MAGIC_WRITE_ML_DEFAULT_TARGET_STYLES,
-) -> Path:
-    """Train and save the Magic Write ML model artifact."""
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    model = train_magic_write_ml_model(target_documents=target_documents, target_styles=target_styles)
-    if output_path.suffix.lower() == ".pkl":
-        output_path.write_bytes(pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL))
-    else:
-        output_path.write_text(json.dumps(model, indent=2), encoding="utf-8")
-    return output_path
 
 
 def load_magic_write_ml_model(path: str | os.PathLike[str]) -> dict[str, Any]:
@@ -2805,25 +2425,6 @@ def _assign_generation_text_ids(objects: list[dict[str, Any]], seed: int) -> Non
             assign(obj)
 
 
-def _modern_text_visual_family(obj: dict[str, Any]) -> tuple[Any, ...]:
-    colors = sorted(
-        color
-        for color in (
-            _clean_hex(obj.get("fill"), ""),
-            _clean_hex(obj.get("stroke"), ""),
-            _clean_hex(obj.get("shadowColor"), ""),
-        )
-        if color
-    )
-    return (
-        str(obj.get("text") or ""),
-        _font_kind(str(obj.get("fontFamily") or "")),
-        tuple(colors[:2]),
-        bool(float(obj.get("strokeWidth") or 0) > 0),
-        "glow" if float(obj.get("shadowBlur") or 0) > 1.5 else "offset" if abs(float(obj.get("shadowOffsetX") or 0)) + abs(float(obj.get("shadowOffsetY") or 0)) > 0 else "clean",
-    )
-
-
 def _modern_text_objects(
     text: str,
     count: int | None,
@@ -3167,28 +2768,6 @@ def _fit_composition_children_to_canvas(
             _shift_child_geometry(child, dx, dy)
 
     return fitted
-
-
-def _modern_composition_signature(children: list[dict[str, Any]]) -> tuple[Any, ...]:
-    parts: list[Any] = []
-    for child in children:
-        if not isinstance(child, dict) or child.get("type") != "Text":
-            continue
-        parts.extend(
-            (
-                str(child.get("magicWriteRole") or ""),
-                str(child.get("fill") or ""),
-                str(child.get("stroke") or ""),
-                round(float(child.get("strokeWidth") or 0), 2),
-                str(child.get("shadowColor") or ""),
-                round(float(child.get("shadowBlur") or 0), 2),
-                round(float(child.get("shadowOffsetX") or 0), 2),
-                round(float(child.get("shadowOffsetY") or 0), 2),
-                round(float(child.get("letterSpacing") or 0), 2),
-                round(float(child.get("rotation") or 0), 2),
-            )
-        )
-    return tuple(parts)
 
 
 def _modern_design_choices(
@@ -4180,32 +3759,6 @@ def _normalize_generation_mode(
     if mode == "ml" and not ml_model_path:
         raise ValueError("generation mode 'ml' requires ml_model_path")
     return mode
-
-
-def _konva_text_export_object(obj: dict[str, Any]) -> dict[str, Any] | None:
-    if obj.get("type") == "Text":
-        return deepcopy(obj)
-    children = obj.get("children")
-    if not isinstance(children, list):
-        return None
-    text_children = [
-        child
-        for child in children
-        if isinstance(child, dict) and child.get("type") == "Text"
-    ]
-    if not text_children:
-        return None
-    selected = next(
-        (child for child in text_children if str(child.get("magicWriteRole") or "") == "main"),
-        max(text_children, key=lambda child: float(child.get("fontSize") or 0)),
-    )
-    text_obj = deepcopy(selected)
-    text_obj["x"] = float(obj.get("x") or 0) + float(text_obj.get("x") or 0)
-    text_obj["y"] = float(obj.get("y") or 0) + float(text_obj.get("y") or 0)
-    text_obj["zIndex"] = int(obj.get("zIndex") or text_obj.get("zIndex") or 0)
-    text_obj["draggable"] = True
-    text_obj["listening"] = True
-    return text_obj
 
 
 def _is_bold_font_weight(value: Any) -> bool:
