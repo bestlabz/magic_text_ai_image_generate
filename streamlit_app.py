@@ -1,4 +1,5 @@
 import base64
+import importlib
 import json
 from io import BytesIO
 from pathlib import Path
@@ -6,14 +7,17 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image
 
-from magic_write import MagicWriteModel, save_preview_images
+import magic_write as magic_write_module
+
+magic_write_module = importlib.reload(magic_write_module)
+MagicWriteModel = magic_write_module.MagicWriteModel
+save_preview_images = magic_write_module.save_preview_images
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ML_MODEL_PATH = PROJECT_DIR / "magic_write_ml_model.pkl"
 
 
-@st.cache_resource
 def load_model(canvas_width: int, canvas_height: int) -> MagicWriteModel:
     return MagicWriteModel(canvas_width=canvas_width, canvas_height=canvas_height)
 
