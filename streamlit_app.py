@@ -84,19 +84,59 @@ def build_generation_kwargs(
 
 st.set_page_config(page_title="Magic Write", page_icon="T", layout="wide")
 
+
+def clear_generated_result() -> None:
+    st.session_state.result = None
+
+
 st.title("Magic Write")
 
 with st.sidebar:
     st.header("Generator")
-    text = st.text_area("Text", value="Sparkle", height=100)
-    count = st.number_input("Variants", min_value=1, max_value=10000, value=12, step=1)
+    text = st.text_area(
+        "Text",
+        value="Sparkle",
+        height=100,
+        key="text_input",
+        on_change=clear_generated_result,
+    )
+    count = st.number_input(
+        "Variants",
+        min_value=1,
+        max_value=10000,
+        value=12,
+        step=1,
+        key="variant_count",
+        on_change=clear_generated_result,
+    )
 
     st.header("Canvas")
-    canvas_width = st.number_input("Width", min_value=160, max_value=2000, value=420, step=20)
-    canvas_height = st.number_input("Height", min_value=160, max_value=2000, value=420, step=20)
+    canvas_width = st.number_input(
+        "Width",
+        min_value=160,
+        max_value=2000,
+        value=420,
+        step=20,
+        key="canvas_width",
+        on_change=clear_generated_result,
+    )
+    canvas_height = st.number_input(
+        "Height",
+        min_value=160,
+        max_value=2000,
+        value=420,
+        step=20,
+        key="canvas_height",
+        on_change=clear_generated_result,
+    )
 
     st.header("JSON")
-    output_label = st.selectbox("Type", ["Fabric", "Konva", "Canvas"])
+    output_label = st.selectbox(
+        "Type",
+        ["Fabric", "Konva", "Canvas"],
+        key="json_type",
+        on_change=clear_generated_result,
+    )
 
     generation_mode = "ml"
     output_format = output_label.lower()
@@ -110,6 +150,11 @@ with st.sidebar:
 
 if "result" not in st.session_state:
     st.session_state.result = None
+
+if st.session_state.result is not None:
+    result_meta = st.session_state.result.get("meta", {}) if isinstance(st.session_state.result, dict) else {}
+    if not isinstance(result_meta, dict) or result_meta.get("output_format") != output_format:
+        st.session_state.result = None
 
 if generate_clicked:
     if not text.strip():
