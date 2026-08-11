@@ -2,9 +2,8 @@
 """Magic Write text-style generator.
 
 Input text is matched against a bundled local style dataset and rule-based
-style engine. The selected styles are sanitized into the Konva-compatible Text
-object shape used by the card editor, and each object is rendered into a small
-PNG data URI for preview_image.
+style engine. The selected styles are sanitized into front-end JSON formats,
+and each object is rendered into a small PNG data URI for preview_image.
 """
 
 from __future__ import annotations
@@ -3714,14 +3713,20 @@ def _normalize_output_format(output_format: str | None = None, output_type: str 
     normalized = str(output_format or output_type or "konva").strip().lower()
     aliases = {
         "konva": "konva",
-        "canvas": "konva",
-        "canva": "canva",
+        "canvas": "canvas",
+        "html_canvas": "canvas",
+        "html-canvas": "canvas",
+        "canva": "canvas",
+        "canva_design": "canva_design",
+        "canva-design": "canva_design",
+        "canva_export": "canva_design",
+        "canva-export": "canva_design",
         "fabric": "fabric",
         "fabricjs": "fabric",
         "fabric.js": "fabric",
     }
     if normalized not in aliases:
-        raise ValueError("output format must be 'konva', 'canva', or 'fabric'")
+        raise ValueError("output format must be 'konva', 'canvas', 'canva', 'canva_design', or 'fabric'")
     return aliases[normalized]
 
 
@@ -3965,6 +3970,96 @@ def _fabric_canvas_object(obj: dict[str, Any], canvas_width: int, canvas_height:
     }
 
 
+def _canvas_shadow(text_obj: dict[str, Any]) -> dict[str, Any] | None:
+    shadow = _clean_hex(text_obj.get("shadowColor"), "")
+    if not shadow:
+        return None
+    blur = float(text_obj.get("shadowBlur") or 0)
+    offset_x = float(text_obj.get("shadowOffsetX") or 0)
+    offset_y = float(text_obj.get("shadowOffsetY") or 0)
+    if blur <= 0 and abs(offset_x) <= 0.01 and abs(offset_y) <= 0.01:
+        return None
+    return {
+        "color": shadow,
+        "blur": blur,
+        "offsetX": offset_x,
+        "offsetY": offset_y,
+        "opacity": float(text_obj.get("shadowOpacity") or 1),
+    }
+
+
+def _canvas_font_css(text_obj: dict[str, Any]) -> str:
+    style = str(text_obj.get("fontStyle") or "normal").strip() or "normal"
+    weight = str(text_obj.get("fontWeight") or "normal").strip() or "normal"
+    size = float(text_obj.get("fontSize") or 36)
+    line_height = float(text_obj.get("lineHeight") or 1)
+    family = str(text_obj.get("fontFamily") or "Arial").strip() or "Arial"
+    family = family.replace('"', '\\"')
+    return f'{style} {weight} {size}px/{line_height} "{family}"'
+
+
+def _canvas_text_element(text_obj: dict[str, Any], z_index: int) -> dict[str, Any]:
+    decoration = str(text_obj.get("textDecoration") or "").strip().lower()
+    stroke = _clean_hex(text_obj.get("stroke"), "")
+    align = str(text_obj.get("textAlign") or text_obj.get("align") or "center")
+    return {
+        "id": str(text_obj.get("id") or f"text_{z_index}"),
+        "type": "text",
+        "zIndex": z_index,
+        "text": str(text_obj.get("text") or ""),
+        "x": float(text_obj.get("x") or 0),
+        "y": float(text_obj.get("y") or 0),
+        "width": float(text_obj.get("width") or 0),
+        "height": float(text_obj.get("height") or 0),
+        "rotation": float(text_obj.get("rotation") or 0),
+        "scaleX": float(text_obj.get("scaleX") or 1),
+        "scaleY": float(text_obj.get("scaleY") or 1),
+        "opacity": float(text_obj.get("opacity") or 1),
+        "font": {
+            "family": str(text_obj.get("fontFamily") or "Arial"),
+            "size": float(text_obj.get("fontSize") or 36),
+            "weight": str(text_obj.get("fontWeight") or "normal"),
+            "style": str(text_obj.get("fontStyle") or "normal"),
+            "lineHeight": float(text_obj.get("lineHeight") or 1),
+            "css": _canvas_font_css(text_obj),
+        },
+        "fillStyle": _clean_hex(text_obj.get("fill"), "#111111"),
+        "strokeStyle": stroke or None,
+        "lineWidth": float(text_obj.get("strokeWidth") or 0) if stroke else 0,
+        "textAlign": align,
+        "textBaseline": "top",
+        "letterSpacing": float(text_obj.get("letterSpacing") or 0),
+        "shadow": _canvas_shadow(text_obj),
+        "decoration": {
+            "underline": decoration == "underline",
+            "lineThrough": decoration == "line-through",
+        },
+        "draggable": bool(text_obj.get("draggable", True)),
+        "visible": bool(text_obj.get("visible", True)),
+    }
+
+
+def _canvas_json_object(obj: dict[str, Any], canvas_width: int, canvas_height: int) -> dict[str, Any] | None:
+    text_objects = _fabric_text_objects_from_internal(obj)
+    if not text_objects:
+        return None
+    elements = [
+        _canvas_text_element(text_obj, index)
+        for index, text_obj in enumerate(
+            sorted(text_objects, key=lambda text_obj: int(text_obj.get("zIndex") or 0)),
+            start=1,
+        )
+    ]
+    return {
+        "type": "canvas",
+        "version": "1.0",
+        "width": canvas_width,
+        "height": canvas_height,
+        "background": "rgba(0, 0, 0, 0)",
+        "elements": elements,
+    }
+
+
 def _canva_shadow(text_obj: dict[str, Any]) -> dict[str, Any] | None:
     shadow = _clean_hex(text_obj.get("shadowColor"), "")
     if not shadow:
@@ -4089,6 +4184,14 @@ def _format_magic_write_objects(
             for obj in objects
             if isinstance(obj, dict)
             for canvas in [_fabric_canvas_object(obj, canvas_width, canvas_height)]
+            if canvas is not None
+        ]
+    if output_format == "canvas":
+        return [
+            canvas
+            for obj in objects
+            if isinstance(obj, dict)
+            for canvas in [_canvas_json_object(obj, canvas_width, canvas_height)]
             if canvas is not None
         ]
     return [

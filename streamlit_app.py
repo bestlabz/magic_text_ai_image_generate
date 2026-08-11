@@ -96,7 +96,7 @@ with st.sidebar:
     canvas_height = st.number_input("Height", min_value=160, max_value=2000, value=420, step=20)
 
     st.header("JSON")
-    output_label = st.selectbox("Type", ["Fabric", "Konva", "Canva"])
+    output_label = st.selectbox("Type", ["Fabric", "Konva", "Canvas"])
 
     generation_mode = "ml"
     output_format = output_label.lower()
