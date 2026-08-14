@@ -1090,6 +1090,27 @@ MODERN_MAGIC_WRITE_DATASET: list[dict[str, Any]] = [
 ]
 
 MODERN_COMPOSITION_TEMPLATES: list[dict[str, Any]] = [
+    {"name": "modern_comp_retro_3d_block", "kind": "retro_3d_block"},
+    {"name": "modern_comp_script_3d_swoop", "kind": "script_3d_swoop"},
+    {"name": "modern_comp_tall_3d_comic", "kind": "tall_3d_comic"},
+    {"name": "modern_comp_study_mode_script", "kind": "study_mode_script"},
+    {"name": "modern_comp_festival_ribbon_script", "kind": "festival_ribbon_script"},
+    {"name": "modern_comp_chrome_loop_script", "kind": "chrome_loop_script"},
+    {"name": "modern_comp_gloss_burst_script", "kind": "gloss_burst_script"},
+    {"name": "modern_comp_preview_brush_sticker", "kind": "preview_brush_sticker"},
+    {"name": "modern_comp_preview_glow_script", "kind": "preview_glow_script"},
+    {"name": "modern_comp_preview_serif_luxe", "kind": "preview_serif_luxe"},
+    {"name": "modern_comp_preview_script_block_mix", "kind": "preview_script_block_mix"},
+    {"name": "modern_comp_preview_sale_stack", "kind": "preview_sale_stack"},
+    {"name": "modern_comp_preview_comic_offset", "kind": "preview_comic_offset"},
+    {"name": "modern_comp_preview_neon_stack", "kind": "preview_neon_stack"},
+    {"name": "modern_comp_preview_chrome_shadow", "kind": "preview_chrome_shadow"},
+    {"name": "modern_comp_graduation_varsity_stack", "kind": "graduation_varsity_stack"},
+    {"name": "modern_comp_graduation_script_block", "kind": "graduation_script_block"},
+    {"name": "modern_comp_graduation_badge_shadow", "kind": "graduation_badge_shadow"},
+    {"name": "modern_comp_graduation_neon_label", "kind": "graduation_neon_label"},
+    {"name": "modern_comp_graduation_serif_split", "kind": "graduation_serif_split"},
+    {"name": "modern_comp_graduation_champ_stamp", "kind": "graduation_champ_stamp"},
     {"name": "modern_comp_happy_birthday", "kind": "happy_birthday"},
     {"name": "modern_comp_golden_hour", "kind": "golden_hour"},
     {"name": "modern_comp_light_script", "kind": "light_script"},
@@ -1106,6 +1127,45 @@ MODERN_COMPOSITION_TEMPLATES: list[dict[str, Any]] = [
     {"name": "modern_comp_quarter_roadmap", "kind": "quarter_roadmap"},
     {"name": "modern_comp_neon_open", "kind": "neon_open"},
 ]
+
+MIXED_FONT_COMPOSITION_KINDS = {
+    "retro_3d_block",
+    "script_3d_swoop",
+    "tall_3d_comic",
+    "study_mode_script",
+    "festival_ribbon_script",
+    "chrome_loop_script",
+    "gloss_burst_script",
+    "preview_brush_sticker",
+    "preview_glow_script",
+    "preview_serif_luxe",
+    "preview_script_block_mix",
+    "preview_sale_stack",
+    "preview_comic_offset",
+    "preview_neon_stack",
+    "preview_chrome_shadow",
+    "graduation_varsity_stack",
+    "graduation_script_block",
+    "graduation_badge_shadow",
+    "graduation_neon_label",
+    "graduation_serif_split",
+    "graduation_champ_stamp",
+    "happy_birthday",
+    "bride_groom",
+    "streaming_now",
+    "quarterly_targets",
+    "quarter_roadmap",
+}
+
+PREMIUM_REFERENCE_COMPOSITION_KINDS = {
+    "retro_3d_block",
+    "script_3d_swoop",
+    "tall_3d_comic",
+    "study_mode_script",
+    "festival_ribbon_script",
+    "chrome_loop_script",
+    "gloss_burst_script",
+}
 
 
 def _clamp_number(value: Any, default: float, minimum: float, maximum: float) -> float:
@@ -1971,7 +2031,7 @@ def _konva_text(text: str, style: dict[str, Any], z_index: int, canvas_width: in
         "height": 112,
         "scaleX": 1,
         "scaleY": 1,
-        "rotation": _clamp_number(style.get("rotation"), 0, -18, 18),
+        "rotation": 0,
         "opacity": 1,
         "draggable": True,
         "zIndex": z_index,
@@ -2068,7 +2128,7 @@ def _layer_text(
         "height": float(height),
         "scaleX": 1,
         "scaleY": 1,
-        "rotation": _clamp_number(style.get("rotation"), 0, -18, 18),
+        "rotation": 0,
         "opacity": 1,
         "draggable": True,
         "zIndex": z_index,
@@ -2094,6 +2154,7 @@ def _layer_text(
         "ellipsis": False,
         "listening": True,
         "magicWriteRole": str(style.get("role") or ""),
+        "magicWriteKeepDuplicate": bool(style.get("keepDuplicate")),
     }
 
 
@@ -2632,6 +2693,23 @@ def _remove_duplicate_text_children(children: list[dict[str, Any]]) -> list[dict
             max(candidates, key=lambda child: float(child.get("fontSize") or 0)),
         )
         keep_ids.add(str(chosen.get("id") or ""))
+        depth_candidates = [
+            child
+            for child in candidates
+            if child.get("magicWriteKeepDuplicate")
+            and str(child.get("id") or "") != str(chosen.get("id") or "")
+        ]
+        if depth_candidates:
+            chosen_x = float(chosen.get("x") or 0)
+            chosen_y = float(chosen.get("y") or 0)
+            depth = min(
+                depth_candidates,
+                key=lambda child: (
+                    abs(float(child.get("x") or 0) - chosen_x) + abs(float(child.get("y") or 0) - chosen_y),
+                    int(child.get("zIndex") or 0),
+                ),
+            )
+            keep_ids.add(str(depth.get("id") or ""))
 
     return [
         child
@@ -2640,6 +2718,31 @@ def _remove_duplicate_text_children(children: list[dict[str, Any]]) -> list[dict
         or not str(child.get("text") or "").strip()
         or str(child.get("id") or "") in keep_ids
     ]
+
+
+def _dedupe_repeated_phrase_text(text: str) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return str(text or "")
+    words = clean.split(" ")
+    if len(words) >= 4 and len(words) % 2 == 0:
+        midpoint = len(words) // 2
+        if [word.lower() for word in words[:midpoint]] == [word.lower() for word in words[midpoint:]]:
+            return " ".join(words[:midpoint])
+    if len(words) >= 6 and len(words) % 3 == 0:
+        third = len(words) // 3
+        first = [word.lower() for word in words[:third]]
+        if first == [word.lower() for word in words[third:third * 2]] == [word.lower() for word in words[third * 2:]]:
+            return " ".join(words[:third])
+    return str(text or "")
+
+
+def _normalize_repeated_child_text(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = deepcopy(children)
+    for child in normalized:
+        if isinstance(child, dict) and child.get("type") == "Text":
+            child["text"] = _dedupe_repeated_phrase_text(str(child.get("text") or ""))
+    return normalized
 
 
 def _modern_palette_value(palette: dict[str, str], mode: str) -> str:
@@ -2681,6 +2784,84 @@ def _strengthen_transparent_text_contrast(children: list[dict[str, Any]]) -> lis
             child["shadowOffsetX"] = max(float(child.get("shadowOffsetX") or 0), 1.0)
             child["shadowOffsetY"] = max(float(child.get("shadowOffsetY") or 0), 1.4)
     return adjusted
+
+
+def _sanitize_script_shadows(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    adjusted = deepcopy(children)
+    for child in adjusted:
+        if not isinstance(child, dict) or child.get("type") != "Text":
+            continue
+        if child.get("magicWriteKeepDuplicate"):
+            continue
+        role = str(child.get("magicWriteRole") or "").lower()
+        family = str(child.get("fontFamily") or "")
+        is_script = role == "script" or _font_kind(family) == "script"
+        if not is_script:
+            continue
+
+        offset_x = float(child.get("shadowOffsetX") or 0)
+        offset_y = float(child.get("shadowOffsetY") or 0)
+        blur = float(child.get("shadowBlur") or 0)
+        if abs(offset_x) <= 0.01 and abs(offset_y) <= 0.01:
+            continue
+
+        child["shadowBlur"] = min(max(blur, 0.6), 2.0)
+        child["shadowOffsetX"] = _clamp_number(offset_x, 0, -1.8, 1.8)
+        child["shadowOffsetY"] = _clamp_number(offset_y, 0, -1.8, 2.2)
+        child["strokeWidth"] = min(float(child.get("strokeWidth") or 0), 2.2)
+    return adjusted
+
+
+def _sanitize_composition_shadow_extent(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    adjusted = deepcopy(children)
+    for child in adjusted:
+        if not isinstance(child, dict) or child.get("type") != "Text":
+            continue
+        shadow = _clean_hex(child.get("shadowColor"), "")
+        if not shadow:
+            continue
+        blur = float(child.get("shadowBlur") or 0)
+        offset_x = float(child.get("shadowOffsetX") or 0)
+        offset_y = float(child.get("shadowOffsetY") or 0)
+        shadow_is_dark = _hex_luminance(shadow) < 0.18
+        max_blur = 3.0 if shadow_is_dark else 6.0
+        child["shadowBlur"] = min(blur, max_blur)
+        child["shadowOffsetX"] = _clamp_number(offset_x, 0, -3.0, 3.0)
+        child["shadowOffsetY"] = _clamp_number(offset_y, 0, -3.0, 3.0)
+    return adjusted
+
+
+def _compact_composition_vertical_gaps(
+    children: list[dict[str, Any]],
+    canvas_width: int,
+    canvas_height: int,
+) -> list[dict[str, Any]]:
+    compact = deepcopy(children)
+    text_children = [child for child in compact if isinstance(child, dict) and child.get("type") == "Text"]
+    if len(text_children) < 2:
+        return compact
+
+    ordered = sorted(text_children, key=lambda child: (float(child.get("y") or 0), int(child.get("zIndex") or 0)))
+    max_gap = max(canvas_height * 0.035, 6)
+    for index in range(len(ordered) - 1):
+        current_plain = deepcopy(ordered[index])
+        next_plain = deepcopy(ordered[index + 1])
+        for plain in (current_plain, next_plain):
+            plain["shadowColor"] = ""
+            plain["shadowBlur"] = 0
+            plain["shadowOffsetX"] = 0
+            plain["shadowOffsetY"] = 0
+        current_bbox = _composition_alpha_bbox([current_plain], canvas_width, canvas_height)
+        next_bbox = _composition_alpha_bbox([next_plain], canvas_width, canvas_height)
+        if not current_bbox or not next_bbox:
+            continue
+        gap = next_bbox[1] - current_bbox[3]
+        if gap <= max_gap:
+            continue
+        shift = gap - max_gap
+        for follower in ordered[index + 1:]:
+            follower["y"] = float(follower.get("y") or 0) - shift
+    return compact
 
 
 def _composition_alpha_bbox(
@@ -2731,13 +2912,15 @@ def _fit_composition_children_to_canvas(
     left, top, right, bottom = bbox
     bbox_w = max(right - left, 1)
     bbox_h = max(bottom - top, 1)
-    min_w = canvas_width * 0.62
-    min_h = canvas_height * 0.18
-    max_w = canvas_width * 0.88
-    max_h = canvas_height * 0.58
+    min_w = canvas_width * 0.72
+    min_h = canvas_height * 0.26
+    max_w = canvas_width * 0.90
+    max_h = canvas_height * 0.64
 
     max_fit = min(max_w / bbox_w, max_h / bbox_h)
-    grow = max(min_w / bbox_w, min_h / bbox_h, 1.0)
+    is_very_wide = bbox_w / bbox_h > 5.2
+    effective_min_h = canvas_height * (0.20 if is_very_wide else 0.26)
+    grow = max(min_w / bbox_w, effective_min_h / bbox_h, 1.0)
     factor = min(grow, max_fit, 1.9) if grow > 1.0 else min(max_fit, 1.0)
     if factor > 1.01 or factor < 0.99:
         origin = ((left + right) / 2, (top + bottom) / 2)
@@ -2871,7 +3054,7 @@ def _apply_modern_composition_design(
 
         if role in {"script", "serif"}:
             child["letterSpacing"] = min(float(child.get("letterSpacing") or 0), 0.6)
-            child["rotation"] = float(child.get("rotation") or 0) + (rng.choice([-2, -1, 0, 1, 2]) if randomize_designs else 0)
+            child["rotation"] = 0
         elif role in {"top", "sub"}:
             child["letterSpacing"] = max(float(child.get("letterSpacing") or 0), 1.2 + (index % 3) * 0.4)
         else:
@@ -2890,6 +3073,53 @@ def _apply_modern_composition_design(
             child["shadowBlur"] = 1.2
             child["shadowOffsetX"] = 1.5
             child["shadowOffsetY"] = 2.2
+        elif kind == "preview_brush_sticker":
+            child["fill"] = _modern_palette_value(palette, "secondary") or "#FF6B6B"
+            child["stroke"] = _modern_palette_value(palette, "light") or "#FFFFFF"
+            child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 2.4)
+            child["shadowColor"] = _modern_palette_value(palette, "accent") or "#FFC3A6"
+            child["shadowBlur"] = 0.8
+            child["shadowOffsetX"] = 1.2
+            child["shadowOffsetY"] = 1.8
+        elif kind == "preview_glow_script":
+            child["fill"] = _modern_palette_value(palette, "light") or "#FFF8D8"
+            child["stroke"] = _modern_palette_value(palette, "accent") or "#FFD66B"
+            child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 1.0)
+            child["shadowColor"] = _modern_palette_value(palette, "glow") or "#FFE58A"
+            child["shadowBlur"] = 22
+            child["shadowOffsetX"] = 0
+            child["shadowOffsetY"] = 0
+        elif kind == "preview_comic_offset":
+            child["fill"] = _modern_palette_value(palette, "primary") or "#20A9D6"
+            child["stroke"] = _modern_palette_value(palette, "light") or "#FFFFFF"
+            child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 2.0)
+            child["shadowColor"] = _modern_palette_value(palette, "secondary") or "#FF4F61"
+            child["shadowBlur"] = 0
+            child["shadowOffsetX"] = 4.5
+            child["shadowOffsetY"] = 0
+        elif kind in {"preview_sale_stack", "preview_neon_stack", "preview_chrome_shadow", "preview_script_block_mix", "preview_serif_luxe"}:
+            if role == "main":
+                child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 1.5 if kind != "preview_chrome_shadow" else 2.2)
+                child["shadowBlur"] = 18 if kind == "preview_neon_stack" else 0 if kind in {"preview_sale_stack", "preview_chrome_shadow"} else float(child.get("shadowBlur") or 0)
+                child["shadowOffsetX"] = 0 if kind == "preview_neon_stack" else min(max(float(child.get("shadowOffsetX") or 0), 1.2), 2.4)
+                child["shadowOffsetY"] = 0 if kind == "preview_neon_stack" else min(max(float(child.get("shadowOffsetY") or 0), 1.4), 2.8)
+        elif kind in {"graduation_varsity_stack", "graduation_script_block", "graduation_badge_shadow", "graduation_neon_label", "graduation_serif_split", "graduation_champ_stamp"}:
+            if role == "main":
+                child["fill"] = _modern_palette_value(palette, "accent") or "#F6C84B"
+                child["stroke"] = _modern_palette_value(palette, "primary") or "#123A6F"
+                child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 2.4)
+                child["shadowColor"] = _modern_palette_value(palette, "shadow") or _modern_palette_value(palette, "secondary") or "#0B2448"
+                child["shadowBlur"] = 0
+                child["shadowOffsetX"] = 4.5 + (index % 3)
+                child["shadowOffsetY"] = 5.0 + (index % 3)
+            elif role in {"script", "sub"}:
+                child["fill"] = _modern_palette_value(palette, "secondary") or "#FF4F61"
+                child["stroke"] = _modern_palette_value(palette, "light") or "#FFFFFF"
+                child["strokeWidth"] = max(float(child.get("strokeWidth") or 0), 1.0)
+                child["shadowColor"] = _modern_palette_value(palette, "shadow") or "#123A6F"
+                child["shadowBlur"] = 0
+                child["shadowOffsetX"] = 1.6
+                child["shadowOffsetY"] = 2.0
 
     return designed, str(palette["name"]), effect_name
 
@@ -2906,6 +3136,42 @@ def _composition_text_for_kind(text: str, kind: str) -> dict[str, Any]:
 
     if kind in {"light_script", "neon_glow"}:
         return {"main": " ".join(display_lines)}
+    if kind in {
+        "retro_3d_block",
+        "script_3d_swoop",
+        "tall_3d_comic",
+        "study_mode_script",
+        "festival_ribbon_script",
+        "chrome_loop_script",
+        "gloss_burst_script",
+        "preview_brush_sticker",
+        "preview_glow_script",
+        "preview_serif_luxe",
+        "preview_script_block_mix",
+        "preview_sale_stack",
+        "preview_comic_offset",
+        "preview_neon_stack",
+        "preview_chrome_shadow",
+    }:
+        words = re.findall(r"[A-Za-z0-9'&]+", text)
+        if len(words) >= 2:
+            split_at = max(1, len(words) // 2)
+            top = " ".join(words[:split_at])
+            main = " ".join(words[split_at:])
+        else:
+            top = ""
+            main = first
+        if kind in {"preview_sale_stack", "preview_neon_stack", "preview_chrome_shadow"}:
+            return {"script": top, "main": main.upper()}
+        if kind == "preview_serif_luxe":
+            return {"script": top, "main": main.upper() if top else first.upper()}
+        if kind in {"retro_3d_block", "tall_3d_comic"}:
+            return {"script": "", "main": " ".join(words).upper() if words else first.upper()}
+        if kind == "study_mode_script":
+            return {"script": top or display_first, "main": (main or display_second or display_first).upper()}
+        if kind == "festival_ribbon_script":
+            return {"script": top.upper() if top else "HAPPY", "main": main or first}
+        return {"script": top, "main": main}
     if kind == "thank_you":
         if len(lines) >= 3 and second.strip() in {"&", "+", "and", "AND"}:
             return {"top": first.upper(), "middle": second.strip(), "main": third.upper()}
@@ -2920,6 +3186,23 @@ def _composition_text_for_kind(text: str, kind: str) -> dict[str, Any]:
         if len(lines) >= 2:
             return {"script": first, "main": "\n".join(line.upper() for line in lines[1:3])}
         return {"script": "", "main": first.upper()}
+    if kind in {"graduation_varsity_stack", "graduation_script_block", "graduation_badge_shadow", "graduation_neon_label", "graduation_serif_split", "graduation_champ_stamp"}:
+        year_match = re.search(r"\b(20\d{2}|19\d{2})\b", text)
+        year = year_match.group(1) if year_match else ""
+        prefix = re.sub(r"\b(20\d{2}|19\d{2})\b", "", text, flags=re.IGNORECASE)
+        prefix = re.sub(r"\s+", " ", prefix).strip(" -")
+        if not prefix:
+            prefix = "Class Of"
+        if "class" in normalized and "of" in normalized:
+            script = "Class"
+            main = f"OF {year}".strip()
+        elif len(display_lines) >= 2:
+            script = display_first
+            main = display_second
+        else:
+            script = prefix
+            main = year or first
+        return {"script": script, "main": main.upper(), "year": year}
     if kind == "bride_groom":
         if "bride" in normalized or "groom" in normalized:
             return {"script": "Bride &", "main": "GROOM"}
@@ -2993,6 +3276,9 @@ def _modern_composition_variant(
         ]
         return pick_font("display", strong_display)
 
+    def clean_block_font() -> str:
+        return pick_font("display", ["Anton", "Impact", "Archivo Black", "League Spartan", "Bebas Neue"])
+
     def sans_font() -> str:
         return pick_font("sans")
 
@@ -3002,7 +3288,79 @@ def _modern_composition_variant(
         return group_font
 
     children: list[dict[str, Any]] = []
-    if kind == "light_script":
+    if kind == "retro_3d_block":
+        colorways = [
+            ("#FFD36A", "#FF6A2E", "#E73535", "#1C1230", "#183F38"),
+            ("#FFE994", "#FF4E43", "#D62839", "#101820", "#2C8B6F"),
+            ("#FFB02E", "#F4472E", "#7B1E5E", "#111111", "#2B1864"),
+            ("#F8E7B5", "#EF3F4F", "#0C2340", "#151515", "#2EC4B6"),
+        ]
+        fill, warm, red_depth, ink, teal_depth = colorways[index % len(colorways)]
+        main_text = data.get("main") or text.upper()
+        box_x = margin * 0.45
+        box_w = canvas_width - box_x * 2
+        block_font = clean_block_font()
+        children.append(_layer_text(main_text, {"fontFamily": block_font, "fontSize": 74, "fontWeight": "bold", "fill": fill, "stroke": ink, "strokeWidth": 2.8, "shadowColor": ink, "shadowBlur": 0.5, "shadowOffsetX": 0.8, "shadowOffsetY": 1.0, "letterSpacing": -0.2, "lineHeight": 0.78, "role": "main"}, z_base + 5, box_x, 142, box_w, 112))
+    elif kind == "script_3d_swoop":
+        colorways = [
+            ("#FF6A35", "#FFC85B", "#082D4A", "#0A122C", "#23A6A8"),
+            ("#F95E47", "#FFE07A", "#123A52", "#211437", "#2EC4B6"),
+            ("#FF8842", "#FFD36A", "#23172F", "#031B36", "#159A9C"),
+        ]
+        fill, glow, ink, navy, teal = colorways[index % len(colorways)]
+        main_text = " ".join([data.get("script", ""), data.get("main", "")]).strip() or text
+        box_x = margin * 0.35
+        box_w = canvas_width - box_x * 2
+        children.append(_layer_text(main_text, {"fontFamily": script_font(), "fontSize": 82, "fontWeight": "bold", "fontStyle": "italic", "fill": fill, "stroke": ink, "strokeWidth": 2.6, "shadowColor": teal, "shadowBlur": 0.8, "shadowOffsetX": 2.0, "shadowOffsetY": 2.2, "letterSpacing": 0, "lineHeight": 0.76, "role": "main"}, z_base + 4, box_x, 130, box_w, 128))
+    elif kind == "tall_3d_comic":
+        main_text = data.get("main") or text.upper()
+        box_x = margin * 0.55
+        box_w = canvas_width - box_x * 2
+        block_font = clean_block_font()
+        children.append(_layer_text(main_text, {"fontFamily": block_font, "fontSize": 72, "fontWeight": "bold", "fill": "#FFD53F", "stroke": "#050505", "strokeWidth": 4.0, "shadowColor": "#050505", "shadowBlur": 0.5, "shadowOffsetX": 0.8, "shadowOffsetY": 1.0, "letterSpacing": -0.3, "lineHeight": 0.78, "role": "main"}, z_base + 5, box_x, 142, box_w, 114))
+    elif kind == "study_mode_script":
+        script = data.get("script") or "Study"
+        main = data.get("main") or text.upper()
+        children.append(_layer_text(script, {"fontFamily": script_font(), "fontSize": 62, "fontWeight": "bold", "fontStyle": "italic", "fill": "#FFF5D7", "stroke": "#0C3342", "strokeWidth": 1.4, "shadowColor": "#1D6B73", "shadowBlur": 0.6, "shadowOffsetX": 1.3, "shadowOffsetY": 1.4, "lineHeight": 0.78, "role": "script"}, z_base + 3, margin, 96, full_w, 78))
+        children.append(_layer_text(main, {"fontFamily": clean_block_font(), "fontSize": 66, "fontWeight": "bold", "fill": "#F57B45", "stroke": "#0C3342", "strokeWidth": 2.8, "shadowColor": "#0C3342", "shadowBlur": 0.5, "shadowOffsetX": 3.0, "shadowOffsetY": 3.6, "letterSpacing": -0.2, "lineHeight": 0.78, "role": "main"}, z_base + 7, margin, 168, full_w, 106))
+    elif kind == "festival_ribbon_script":
+        script = data.get("script") or "HAPPY"
+        main = data.get("main") or text
+        children.append(_layer_text(script, {"fontFamily": sans_font(), "fontSize": 25, "fontWeight": "bold", "fill": "#F9B72E", "letterSpacing": 5.2, "lineHeight": 0.86, "role": "sub"}, z_base, margin, 100, full_w, 38))
+        children.append(_layer_text(main, {"fontFamily": script_font(), "fontSize": 86, "fontWeight": "bold", "fontStyle": "italic", "fill": "#8E24C7", "stroke": "#FFFFFF", "strokeWidth": 1.6, "shadowColor": "#5A168E", "shadowBlur": 1.0, "shadowOffsetX": 2.0, "shadowOffsetY": 2.2, "lineHeight": 0.74, "role": "main"}, z_base + 4, margin, 132, full_w, 128))
+    elif kind == "chrome_loop_script":
+        main_text = " ".join([data.get("script", ""), data.get("main", "")]).strip() or text
+        children.append(_layer_text(main_text, {"fontFamily": script_font(), "fontSize": 76, "fontWeight": "normal", "fontStyle": "italic", "fill": "#F6A07E", "stroke": "#083947", "strokeWidth": 2.2, "shadowColor": "#0E778A", "shadowBlur": 1.0, "shadowOffsetX": 1.8, "shadowOffsetY": 2.0, "lineHeight": 0.78, "role": "main"}, z_base + 4, margin, 132, full_w, 128))
+    elif kind == "gloss_burst_script":
+        main_text = " ".join([data.get("script", ""), data.get("main", "")]).strip() or text
+        children.append(_layer_text(main_text, {"fontFamily": script_font(), "fontSize": 82, "fontWeight": "bold", "fontStyle": "italic", "fill": "#E32216", "stroke": "#FFFFFF", "strokeWidth": 1.3, "shadowColor": "#7A0505", "shadowBlur": 1.0, "shadowOffsetX": 2.0, "shadowOffsetY": 2.4, "lineHeight": 0.76, "role": "main"}, z_base + 3, margin, 144, full_w, 110))
+    elif kind == "preview_brush_sticker":
+        children.append(_layer_text(data.get("script") or data.get("main", text), {"fontFamily": script_font(), "fontSize": 58, "fontWeight": "bold", "fontStyle": "italic", "fill": "#FF6B6B", "stroke": "#FFFFFF", "strokeWidth": 3.0, "shadowColor": "#FFC3A6", "shadowBlur": 0, "shadowOffsetX": 4.0, "shadowOffsetY": 6.0, "letterSpacing": 0, "rotation": -4, "lineHeight": 0.78, "role": "script"}, z_base, margin, 122, full_w, 78))
+        if data.get("main") and data.get("script"):
+            children.append(_layer_text(data["main"], {"fontFamily": script_font(), "fontSize": 54, "fontWeight": "bold", "fontStyle": "italic", "fill": "#FF6B6B", "stroke": "#FFFFFF", "strokeWidth": 3.0, "shadowColor": "#FFC3A6", "shadowBlur": 0, "shadowOffsetX": 4.0, "shadowOffsetY": 6.0, "letterSpacing": 0, "rotation": -4, "lineHeight": 0.78, "role": "main"}, z_base + 1, margin, 180, full_w, 82))
+    elif kind == "preview_glow_script":
+        children.append(_layer_text(" ".join([data.get("script", ""), data.get("main", "")]).strip() or text, {"fontFamily": script_font(), "fontSize": 58, "fontWeight": "normal", "fontStyle": "italic", "fill": "#FFF8D8", "stroke": "#FFD66B", "strokeWidth": 1.2, "shadowColor": "#FFE58A", "shadowBlur": 24, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 0, "rotation": -2, "lineHeight": 0.82, "role": "main"}, z_base, margin, 154, full_w, 96))
+    elif kind == "preview_serif_luxe":
+        if data.get("script"):
+            children.append(_layer_text(data["script"], {"fontFamily": serif_font(), "fontSize": 35, "fontWeight": "normal", "fontStyle": "italic", "fill": "#15422C", "letterSpacing": 0.4, "lineHeight": 0.86, "role": "script"}, z_base, margin, 126, full_w, 54))
+        children.append(_layer_text(data["main"], {"fontFamily": serif_font(), "fontSize": 56, "fontWeight": "bold", "fill": "#15422C", "stroke": "#F7E9C8", "strokeWidth": 0.8, "shadowColor": "#C99718", "shadowBlur": 1.2, "shadowOffsetX": 1.4, "shadowOffsetY": 2.2, "letterSpacing": 0.6, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 168 if data.get("script") else 150, full_w, 112))
+    elif kind == "preview_script_block_mix":
+        if data.get("script"):
+            children.append(_layer_text(data["script"], {"fontFamily": script_font(), "fontSize": 38, "fontWeight": "bold", "fontStyle": "italic", "fill": "#AEB5C1", "rotation": -3, "letterSpacing": 0, "lineHeight": 0.82, "role": "script"}, z_base, margin, 126, full_w, 60))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#FF4F61", "stroke": "#FFFFFF", "strokeWidth": 1.4, "shadowColor": "#AEB5C1", "shadowBlur": 0, "shadowOffsetX": -4.0, "shadowOffsetY": -3.0, "letterSpacing": 0.4, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 174, full_w, 98))
+    elif kind == "preview_sale_stack":
+        if data.get("script"):
+            children.append(_layer_text(data["script"].upper(), {"fontFamily": display_font(), "fontSize": 42, "fontWeight": "bold", "fill": "#F9C74F", "stroke": "#FFFFFF", "strokeWidth": 1.5, "shadowColor": "#FF4F61", "shadowBlur": 0, "shadowOffsetX": 3.0, "shadowOffsetY": 3.0, "letterSpacing": 1.0, "role": "script"}, z_base, margin, 122, full_w, 58))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 68, "fontWeight": "bold", "fill": "#FF4F61", "stroke": "#FFFFFF", "strokeWidth": 2.0, "shadowColor": "#7B2CBF", "shadowBlur": 0, "shadowOffsetX": 6.0, "shadowOffsetY": 7.0, "letterSpacing": 0.4, "lineHeight": 0.82, "role": "main"}, z_base + 1, margin, 168, full_w, 116))
+    elif kind == "preview_comic_offset":
+        children.append(_layer_text(" ".join([data.get("script", ""), data.get("main", "")]).strip().upper() or text.upper(), {"fontFamily": display_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#20A9D6", "stroke": "#FFFFFF", "strokeWidth": 2.2, "shadowColor": "#FF4F61", "shadowBlur": 0, "shadowOffsetX": 5.0, "shadowOffsetY": 0, "letterSpacing": 0.8, "lineHeight": 0.84, "role": "main"}, z_base, margin, 154, full_w, 112))
+    elif kind == "preview_neon_stack":
+        if data.get("script"):
+            children.append(_layer_text(data["script"].upper(), {"fontFamily": display_font(), "fontSize": 32, "fontWeight": "bold", "fill": "#FFFFFF", "stroke": "#FF8AD7", "strokeWidth": 1.2, "shadowColor": "#FF4FB3", "shadowBlur": 15, "letterSpacing": 1.2, "role": "script"}, z_base, margin, 132, full_w, 46))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 62, "fontWeight": "bold", "fill": "#FF4FB3", "stroke": "#FF8AD7", "strokeWidth": 1.6, "shadowColor": "#FF4FB3", "shadowBlur": 20, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 0.4, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 176, full_w, 92))
+    elif kind == "preview_chrome_shadow":
+        children.append(_layer_text(" ".join([data.get("script", ""), data.get("main", "")]).strip().upper() or text.upper(), {"fontFamily": display_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#FFFFFF", "stroke": "#2D3552", "strokeWidth": 2.2, "shadowColor": "#BFC6D1", "shadowBlur": 0, "shadowOffsetX": 4.0, "shadowOffsetY": 5.0, "letterSpacing": 2.4, "lineHeight": 0.84, "role": "main"}, z_base, margin, 158, full_w, 106))
+    elif kind == "light_script":
         children.append(_layer_text(data["main"], {"fontFamily": script_font(), "fontSize": 64, "fontWeight": "normal", "fontStyle": "italic", "fill": "#FFFFFF", "stroke": "#FFD37A", "strokeWidth": 1.3, "shadowColor": "#FFD37A", "shadowBlur": 18, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 0, "lineHeight": 0.82, "role": "main"}, z_base, margin, 154, full_w, 96))
     elif kind == "neon_glow":
         children.append(_layer_text(data["main"], {"fontFamily": script_font(), "fontSize": 54, "fontWeight": "normal", "fontStyle": "italic", "fill": "#FFFFFF", "stroke": "#9A8CFF", "strokeWidth": 1.4, "shadowColor": "#8179FF", "shadowBlur": 18, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 0, "lineHeight": 0.86, "role": "main"}, z_base, margin, 154, full_w, 100))
@@ -3021,6 +3379,28 @@ def _modern_composition_variant(
         if data.get("script"):
             children.append(_layer_text(data["script"], {"fontFamily": script_font(), "fontSize": 42, "fontWeight": "bold", "fill": "#111111", "stroke": "#FFFFFF", "strokeWidth": 1.2, "rotation": -4, "lineHeight": 0.9, "role": "script"}, z_base, margin, 128, full_w, 66))
         children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 48, "fontWeight": "bold", "fill": "#050505", "letterSpacing": 0.2, "lineHeight": 0.9, "role": "main"}, z_base + 1, margin, 186 if data.get("script") else 162, full_w, 96))
+    elif kind == "graduation_varsity_stack":
+        if data.get("script"):
+            children.append(_layer_text(data["script"], {"fontFamily": serif_font(), "fontSize": 30, "fontWeight": "bold", "fill": "#FFFFFF", "stroke": "#123A6F", "strokeWidth": 1.4, "shadowColor": "#0B2448", "shadowBlur": 0, "shadowOffsetX": 2.0, "shadowOffsetY": 2.2, "letterSpacing": 1.0, "rotation": -2, "lineHeight": 0.9, "role": "script"}, z_base, margin, 116, full_w, 48))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 64, "fontWeight": "bold", "fill": "#F6C84B", "stroke": "#123A6F", "strokeWidth": 2.8, "shadowColor": "#0B2448", "shadowBlur": 0, "shadowOffsetX": 5.0, "shadowOffsetY": 6.0, "letterSpacing": 1.0, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 158, full_w, 112))
+    elif kind == "graduation_script_block":
+        if data.get("script"):
+            children.append(_layer_text(data["script"], {"fontFamily": script_font(), "fontSize": 52, "fontWeight": "bold", "fontStyle": "italic", "fill": "#FF4F61", "stroke": "#0C2340", "strokeWidth": 1.2, "shadowColor": "#0C2340", "shadowBlur": 0, "shadowOffsetX": 3.0, "shadowOffsetY": 3.6, "letterSpacing": 0, "rotation": -5, "lineHeight": 0.82, "role": "script"}, z_base, margin, 104, full_w, 82))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#FFF4D0", "stroke": "#0C2340", "strokeWidth": 3.0, "shadowColor": "#FF4F61", "shadowBlur": 0, "shadowOffsetX": -3.5, "shadowOffsetY": 5.0, "letterSpacing": 0.8, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 178, full_w, 104))
+    elif kind == "graduation_badge_shadow":
+        if data.get("script"):
+            children.append(_layer_text(data["script"].upper(), {"fontFamily": sans_font(), "fontSize": 20, "fontWeight": "bold", "fill": "#35B8EA", "letterSpacing": 4.2, "lineHeight": 0.9, "role": "sub"}, z_base, margin, 116, full_w, 34))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 66, "fontWeight": "bold", "fill": "#FF6B35", "stroke": "#FFFFFF", "strokeWidth": 2.4, "shadowColor": "#173F8A", "shadowBlur": 0, "shadowOffsetX": 6.0, "shadowOffsetY": 7.0, "letterSpacing": 0.4, "lineHeight": 0.82, "role": "main"}, z_base + 1, margin, 156, full_w, 116))
+    elif kind == "graduation_neon_label":
+        children.append(_layer_text(f"{data.get('script', '').upper()} {data.get('main', '')}".strip(), {"fontFamily": display_font(), "fontSize": 38, "fontWeight": "bold", "fill": "#FFFFFF", "stroke": "#FF4FB3", "strokeWidth": 1.6, "shadowColor": "#FF4FB3", "shadowBlur": 18, "shadowOffsetX": 0, "shadowOffsetY": 0, "letterSpacing": 1.0, "lineHeight": 0.86, "role": "main"}, z_base, margin, 164, full_w, 70))
+    elif kind == "graduation_serif_split":
+        if data.get("script"):
+            children.append(_layer_text(data["script"].upper(), {"fontFamily": sans_font(), "fontSize": 24, "fontWeight": "bold", "fill": "#123A6F", "stroke": "#FFFFFF", "strokeWidth": 0.8, "shadowColor": "#A9B3C1", "shadowBlur": 1.6, "shadowOffsetX": 1.0, "shadowOffsetY": 2.0, "letterSpacing": 4.0, "lineHeight": 0.9, "role": "sub"}, z_base, margin, 128, full_w, 40))
+        children.append(_layer_text(data["main"], {"fontFamily": serif_font(), "fontSize": 52, "fontWeight": "bold", "fill": "#D6A816", "stroke": "#123A6F", "strokeWidth": 1.8, "shadowColor": "#A3832C", "shadowBlur": 1.0, "shadowOffsetX": 2.0, "shadowOffsetY": 3.0, "letterSpacing": 1.0, "lineHeight": 0.86, "role": "main"}, z_base + 1, margin, 178, full_w, 82))
+    elif kind == "graduation_champ_stamp":
+        if data.get("script"):
+            children.append(_layer_text(data["script"].upper(), {"fontFamily": sans_font(), "fontSize": 22, "fontWeight": "bold", "fill": "#1F5BFF", "stroke": "#FFFFFF", "strokeWidth": 1.0, "letterSpacing": 3.2, "lineHeight": 0.9, "role": "sub"}, z_base, margin, 122, full_w, 34))
+        children.append(_layer_text(data["main"], {"fontFamily": display_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#FFFFFF", "stroke": "#1F5BFF", "strokeWidth": 3.0, "shadowColor": "#FF595E", "shadowBlur": 0, "shadowOffsetX": 4.0, "shadowOffsetY": 5.0, "letterSpacing": 1.2, "lineHeight": 0.84, "role": "main"}, z_base + 1, margin, 162, full_w, 100))
     elif kind == "golden_hour":
         children.append(_layer_text(data["main"], {"fontFamily": serif_font(), "fontSize": 58, "fontWeight": "bold", "fill": "#D8A919", "shadowColor": "#BCA36B", "shadowBlur": 1.2, "shadowOffsetX": 2, "shadowOffsetY": 3, "letterSpacing": 0.2, "lineHeight": 0.83, "role": "main"}, z_base, margin, 136, full_w, 158))
     elif kind == "script_club":
@@ -3053,22 +3433,34 @@ def _modern_composition_variant(
         children.append(_layer_text(data.get("script", text), {"fontFamily": script_font(), "fontSize": 52, "fontWeight": "normal", "fontStyle": "italic", "fill": "#B64040", "lineHeight": 0.82, "role": "script"}, z_base, margin, 130, full_w, 82))
         children.append(_layer_text(data.get("main", text), {"fontFamily": serif_font(), "fontSize": 30, "fontWeight": "normal", "fill": "#B64040", "lineHeight": 0.9, "role": "main"}, z_base + 1, margin, 196, full_w, 76))
 
+    children = _normalize_repeated_child_text(children)
     children = _remove_duplicate_text_children(children)
-    children = _use_single_font_family_per_group(children)
-    children, palette_name, effect_name = _apply_modern_composition_design(
-        children,
-        kind,
-        index,
-        rng,
-        randomize_designs,
-        used_designs,
-        used_palettes,
-        used_effects,
-    )
-    children = _tighten_composition_children(children, canvas_height)
+    if kind not in MIXED_FONT_COMPOSITION_KINDS:
+        children = _use_single_font_family_per_group(children)
+    if kind in PREMIUM_REFERENCE_COMPOSITION_KINDS:
+        palette_name = "reference_premium"
+        effect_name = kind
+    else:
+        children, palette_name, effect_name = _apply_modern_composition_design(
+            children,
+            kind,
+            index,
+            rng,
+            randomize_designs,
+            used_designs,
+            used_palettes,
+            used_effects,
+        )
+        children = _tighten_composition_children(children, canvas_height)
     children = _strengthen_transparent_text_contrast(children)
+    children = _sanitize_script_shadows(children)
+    children = _sanitize_composition_shadow_extent(children)
+    children = _compact_composition_vertical_gaps(children, canvas_width, canvas_height)
     children = _fit_composition_children_to_canvas(children, canvas_width, canvas_height)
-    return _composition_text_object(str(template.get("name") or kind), kind, children, index + 1, canvas_width, canvas_height)
+    result = _composition_text_object(str(template.get("name") or kind), kind, children, index + 1, canvas_width, canvas_height)
+    result["magicWritePalette"] = palette_name
+    result["magicWriteEffect"] = effect_name
+    return result
 
 
 def _modern_composition_groups(
@@ -3085,10 +3477,33 @@ def _modern_composition_groups(
         for position, template in enumerate(MODERN_COMPOSITION_TEMPLATES)
     }
     normalized = text.lower()
+    graduation_kinds = {
+        "graduation_varsity_stack",
+        "graduation_script_block",
+        "graduation_badge_shadow",
+        "graduation_neon_label",
+        "graduation_serif_split",
+        "graduation_champ_stamp",
+    }
+    if any(token in normalized for token in ("class", "graduation", "graduate", "grad", "2026", "2027", "2028")):
+        templates = [template for template in templates if str(template.get("kind") or "") in graduation_kinds] or templates
 
     def score(template: dict[str, Any]) -> int:
         kind = str(template.get("kind") or "")
         checks = {
+            "retro_3d_block": ("hungry", "fresh", "bold", "sale", "block"),
+            "script_3d_swoop": ("hungry", "travel", "time", "vacation", "feeling"),
+            "tall_3d_comic": ("hungry", "comic", "pop", "fresh", "shop"),
+            "study_mode_script": ("study", "mode", "class", "school", "learn"),
+            "festival_ribbon_script": ("diwali", "festival", "happy", "celebrate", "joy"),
+            "chrome_loop_script": ("good", "vibes", "chill", "hello", "feeling"),
+            "gloss_burst_script": ("swipe", "simple", "shine", "sparkle"),
+            "graduation_varsity_stack": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
+            "graduation_script_block": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
+            "graduation_badge_shadow": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
+            "graduation_neon_label": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
+            "graduation_serif_split": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
+            "graduation_champ_stamp": ("class", "graduation", "graduate", "grad", "2026", "2027", "2028"),
             "light_script": ("sparkle", "light", "glow", "shine", "neon"),
             "neon_glow": ("neon", "glow", "open", "light"),
             "thank_you": ("thank", "you"),

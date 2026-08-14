@@ -17,9 +17,26 @@ save_preview_images = magic_write_module.save_preview_images
 PROJECT_DIR = Path(__file__).resolve().parent
 ML_MODEL_PATH = PROJECT_DIR / "magic_write_ml_model.pkl"
 
+CATEGORY_TEXT_SAMPLES = {
+    "Birthday": ["Happy Birthday", "Birthday Bash", "Make a Wish", "Party Time"],
+    "Party": ["Party Night", "Let's Party", "Good Vibes", "Celebrate"],
+    "Festival": ["Festival Vibes", "Shine Bright", "Neon Festival", "Celebrate Joy"],
+    "New Year": ["Happy New Year", "New Year Party", "Cheers 2026", "Hello New Year"],
+    "Wedding": ["Bride & Groom", "Wedding Day", "Forever Love", "Just Married"],
+    "Engagement": ["Engaged", "She Said Yes", "Love Story", "Forever Starts"],
+    "Graduation": ["Graduation Day", "Class of 2026", "Congrats Grad", "Dream Big"],
+}
+
 
 def load_model(canvas_width: int, canvas_height: int) -> MagicWriteModel:
     return MagicWriteModel(canvas_width=canvas_width, canvas_height=canvas_height)
+
+
+def text_for_category(category: str, seed: int, count: int) -> str:
+    samples = CATEGORY_TEXT_SAMPLES.get(category, [])
+    if not samples:
+        return ""
+    return samples[(int(seed) + int(count)) % len(samples)]
 
 
 def image_bytes_from_data_uri(data_uri: str) -> bytes:
@@ -43,7 +60,7 @@ def preview_tile_bytes(image_data: bytes, width: int = 720, height: int = 360) -
     )
     image = image.resize(resized_size, Image.Resampling.LANCZOS)
 
-    tile = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    tile = Image.new("RGBA", (width, height), (255, 255, 255, 255))
     draw_tile_background(tile)
     x = (width - image.width) // 2
     y = (height - image.height) // 2
@@ -55,7 +72,7 @@ def preview_tile_bytes(image_data: bytes, width: int = 720, height: int = 360) -
 
 
 def draw_tile_background(tile: Image.Image) -> None:
-    tile.paste((0, 0, 0, 0), (0, 0, tile.width, tile.height))
+    tile.paste((255, 255, 255, 255), (0, 0, tile.width, tile.height))
 
 
 def build_generation_kwargs(
@@ -97,12 +114,19 @@ st.title("Magic Write")
 
 with st.sidebar:
     st.header("Generator")
+    category = st.selectbox(
+        "Category",
+        ["Custom", "Birthday", "Party", "Festival", "New Year", "Wedding", "Engagement", "Graduation"],
+        key="category",
+        on_change=clear_generated_result,
+    )
     text = st.text_area(
         "Text",
-        value="Sparkle",
+        value="",
         height=100,
         key="text_input",
         on_change=clear_generated_result,
+        placeholder="Optional. Leave empty to generate from selected category.",
     )
     count = st.number_input(
         "Variants",
@@ -142,7 +166,7 @@ with st.sidebar:
         on_change=clear_generated_result,
     )
 
-    generation_mode = "ml"
+    generation_mode = "modern_composition"
     output_format = output_label.lower()
     mood = ""
     seed_enabled = False
@@ -161,21 +185,23 @@ if st.session_state.result is not None:
         st.session_state.result = None
 
 if generate_clicked:
-    if not text.strip():
-        st.error("Enter text to generate.")
-    elif generation_mode == "ml" and not ML_MODEL_PATH.exists():
-        st.error(f"ML model file not found: {ML_MODEL_PATH}")
+    generated_text = text.strip()
+    if not generated_text and category != "Custom":
+        generated_text = text_for_category(category, int(seed), int(count))
+
+    if not generated_text:
+        st.error("Enter text or choose a category.")
     else:
         try:
             model = load_model(int(canvas_width), int(canvas_height))
             st.session_state.result = model.generate(
-                text.strip(),
+                generated_text,
                 count=int(count),
                 modern=generation_mode != "classic",
                 **build_generation_kwargs(
                     generation_mode=generation_mode,
                     output_format=output_format,
-                    mood=mood,
+                    mood=category if category != "Custom" else mood,
                     seed_enabled=seed_enabled,
                     seed=int(seed),
                     randomize_fonts=randomize_fonts,

@@ -7,8 +7,7 @@ result = model.generate(
     count=12,
     modern=True,
     output_type="fabric",
-    generation_mode="ml",
-    ml_model_path="magic_write_ml_model.pkl",
+    generation_mode="modern_composition",
 )
 
 print(json.dumps(result, indent=2))
