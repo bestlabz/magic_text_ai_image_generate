@@ -1970,6 +1970,130 @@ def _line_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont,
     return width + max(len(text) - 1, 0) * spacing
 
 
+def _split_fill_gradient(top_color: str, bottom_color: str, split: float = 0.52) -> dict[str, Any]:
+    top = _clean_hex(top_color, "#FFFFFF")
+    bottom = _clean_hex(bottom_color, "#111111")
+    split = float(_clamp_number(split, 0.52, 0.15, 0.85))
+    return {
+        "type": "linear",
+        "direction": "vertical",
+        "stops": [
+            {"offset": 0.0, "color": top},
+            {"offset": max(split - 0.035, 0.0), "color": top},
+            {"offset": min(split + 0.035, 1.0), "color": bottom},
+            {"offset": 1.0, "color": bottom},
+        ],
+    }
+
+
+def _normalize_fill_gradient(text_obj: dict[str, Any]) -> dict[str, Any] | None:
+    raw = text_obj.get("fillGradient")
+    if not isinstance(raw, dict):
+        return None
+
+    stops: list[dict[str, Any]] = []
+    for stop in raw.get("stops") or []:
+        if not isinstance(stop, dict):
+            continue
+        color = _clean_hex(stop.get("color"), "")
+        if not color:
+            continue
+        stops.append({
+            "offset": float(_clamp_number(stop.get("offset"), 0, 0, 1)),
+            "color": color,
+        })
+    if len(stops) < 2:
+        return None
+    stops.sort(key=lambda stop: float(stop["offset"]))
+    return {
+        "type": "linear",
+        "direction": str(raw.get("direction") or "vertical").lower(),
+        "stops": stops,
+    }
+
+
+def _apply_fill_gradient_fields(text_obj: dict[str, Any]) -> dict[str, Any]:
+    obj = deepcopy(text_obj)
+    gradient = _normalize_fill_gradient(obj)
+    if not gradient:
+        return obj
+
+    color_stops: list[Any] = []
+    for stop in gradient["stops"]:
+        color_stops.extend([float(stop["offset"]), stop["color"]])
+
+    width = max(float(obj.get("width") or 0), 1.0)
+    height = max(float(obj.get("height") or 0), 1.0)
+    if gradient.get("direction") == "horizontal":
+        end_x, end_y = width, 0
+    else:
+        end_x, end_y = 0, height
+
+    obj["fillLinearGradientStartPoint"] = {"x": 0, "y": 0}
+    obj["fillLinearGradientEndPoint"] = {"x": end_x, "y": end_y}
+    obj["fillLinearGradientStartPointX"] = 0
+    obj["fillLinearGradientStartPointY"] = 0
+    obj["fillLinearGradientEndPointX"] = end_x
+    obj["fillLinearGradientEndPointY"] = end_y
+    obj["fillLinearGradientColorStops"] = color_stops
+    obj["fillPriority"] = "linear-gradient"
+    return obj
+
+
+def _add_split_fill_to_text_obj(text_obj: dict[str, Any], top_color: str, bottom_color: str, split: float = 0.52) -> dict[str, Any]:
+    obj = deepcopy(text_obj)
+    obj["fill"] = _clean_hex(bottom_color, _clean_hex(obj.get("fill"), "#111111"))
+    obj["fillGradient"] = _split_fill_gradient(top_color, bottom_color, split)
+    return _apply_fill_gradient_fields(obj)
+
+
+SPLIT_FILL_COLOR_PAIRS = [
+    ("#FF6A21", "#FFD02E"),
+    ("#FF3D4F", "#FFE766"),
+    ("#FFF6B8", "#F2A900"),
+    ("#FFFFFF", "#35B8EA"),
+    ("#FF9AD5", "#755CFF"),
+    ("#B8F2E6", "#00A896"),
+    ("#FFE2A8", "#FF7A21"),
+    ("#FEE440", "#EF476F"),
+]
+
+
+def _should_use_split_fill(index: int, name: str = "") -> bool:
+    key = f"{name}:{index}"
+    score = sum((position + 1) * ord(char) for position, char in enumerate(key))
+    return score % 10 in {1, 4, 7}
+
+
+def _split_fill_pair_for_text(
+    text_obj: dict[str, Any],
+    palette: dict[str, str] | None = None,
+    index: int = 0,
+) -> tuple[str, str]:
+    family = str(text_obj.get("fontFamily") or "")
+    role = str(text_obj.get("magicWriteRole") or "")
+    fill = _clean_hex(text_obj.get("fill"), "#111111")
+    if _font_kind(family) == "script" or role in {"main", "script"}:
+        return SPLIT_FILL_COLOR_PAIRS[index % len(SPLIT_FILL_COLOR_PAIRS)]
+
+    if palette:
+        top = (
+            _modern_palette_value(palette, "light")
+            or _modern_palette_value(palette, "accent")
+            or SPLIT_FILL_COLOR_PAIRS[index % len(SPLIT_FILL_COLOR_PAIRS)][0]
+        )
+        bottom = (
+            _modern_palette_value(palette, "primary")
+            or _modern_palette_value(palette, "secondary")
+            or fill
+        )
+        if _clean_hex(top, "") and _clean_hex(bottom, "") and top.lower() != bottom.lower():
+            return top, bottom
+
+    top, bottom = SPLIT_FILL_COLOR_PAIRS[index % len(SPLIT_FILL_COLOR_PAIRS)]
+    return top, bottom if bottom.lower() != fill.lower() else fill
+
+
 def _fit_text_box(text_obj: dict[str, Any], canvas_width: int, canvas_height: int) -> dict[str, Any]:
     obj = deepcopy(text_obj)
     lines = str(obj["text"]).splitlines() or [str(obj["text"])]
@@ -2062,7 +2186,10 @@ def _konva_text(text: str, style: dict[str, Any], z_index: int, canvas_width: in
         "textTransform": str(style.get("textTransform") or "none"),
         "accentFill": _clean_hex(style.get("accentFill"), ""),
     }
-    return _fit_text_box(obj, canvas_width, canvas_height)
+    if isinstance(style.get("fillGradient"), dict):
+        obj["fillGradient"] = deepcopy(style["fillGradient"])
+    obj = _fit_text_box(obj, canvas_width, canvas_height)
+    return _apply_fill_gradient_fields(obj)
 
 
 def _text_lines(text: str) -> list[str]:
@@ -2119,7 +2246,7 @@ def _layer_text(
     if align not in {"left", "center", "right"}:
         align = "center"
 
-    return {
+    obj = {
         "id": f"text_{uuid.uuid4()}",
         "type": "Text",
         "x": float(x),
@@ -2156,6 +2283,10 @@ def _layer_text(
         "magicWriteRole": str(style.get("role") or ""),
         "magicWriteKeepDuplicate": bool(style.get("keepDuplicate")),
     }
+    if isinstance(style.get("fillGradient"), dict):
+        obj["fillGradient"] = deepcopy(style["fillGradient"])
+        obj = _apply_fill_gradient_fields(obj)
+    return obj
 
 
 def _composition_text_object(
@@ -2456,6 +2587,7 @@ def _modern_text_signature(obj: dict[str, Any]) -> tuple[Any, ...]:
         str(obj.get("fontWeight") or ""),
         str(obj.get("fontStyle") or ""),
         str(obj.get("fill") or ""),
+        json.dumps(obj.get("fillGradient") or {}, sort_keys=True),
         str(obj.get("stroke") or ""),
         round(float(obj.get("strokeWidth") or 0), 2),
         str(obj.get("shadowColor") or ""),
@@ -2504,6 +2636,18 @@ def _modern_text_objects(
         if len(objects) >= requested:
             break
         style = _modern_text_style_for_index(candidate_index)
+        if _should_use_split_fill(candidate_index, str(style.get("name") or "modern_text")):
+            top_fill, bottom_fill = _split_fill_pair_for_text(style, None, candidate_index)
+            style["fill"] = bottom_fill
+            style["fillGradient"] = _split_fill_gradient(top_fill, bottom_fill, 0.50 + (candidate_index % 3) * 0.035)
+            if not _clean_hex(style.get("stroke"), "") or float(style.get("strokeWidth") or 0) < 1.4:
+                style["stroke"] = "#251B2F"
+                style["strokeWidth"] = 2.4 if _font_kind(str(style.get("fontFamily") or "")) == "script" else 2.0
+            if not _clean_hex(style.get("shadowColor"), ""):
+                style["shadowColor"] = "#251B2F"
+                style["shadowBlur"] = 0
+                style["shadowOffsetX"] = 2.4
+                style["shadowOffsetY"] = 2.8
         styled_text = _apply_text_transform(text, style.get("textTransform"))
         obj = _layer_text(
             styled_text,
@@ -2561,7 +2705,7 @@ def _fit_export_text_object_to_canvas(
     obj["height"] = height
     obj["x"] = _clamp_number(old_cx - width / 2, (canvas_width - width) / 2, pad, canvas_width - pad - width)
     obj["y"] = _clamp_number(old_cy - height / 2, (canvas_height - height) / 2, pad, canvas_height - pad - height)
-    return obj
+    return _apply_fill_gradient_fields(obj)
 
 
 def _text_visual_height_for_child(child: dict[str, Any]) -> float:
@@ -2948,6 +3092,9 @@ def _fit_composition_children_to_canvas(
     for child in fitted:
         if isinstance(child, dict) and child.get("type") == "Text":
             _shift_child_geometry(child, dx, dy)
+            refreshed = _apply_fill_gradient_fields(child)
+            child.clear()
+            child.update(refreshed)
 
     return fitted
 
@@ -3120,6 +3267,28 @@ def _apply_modern_composition_design(
                 child["shadowBlur"] = 0
                 child["shadowOffsetX"] = 1.6
                 child["shadowOffsetY"] = 2.0
+
+        if is_main and _should_use_split_fill(index, f"{kind}:{palette.get('name', '')}:{effect_name}"):
+            top_fill, bottom_fill = _split_fill_pair_for_text(child, palette, index)
+            split_child = _add_split_fill_to_text_obj(
+                child,
+                top_fill,
+                bottom_fill,
+                0.48 + (index % 4) * 0.035,
+            )
+            child.clear()
+            child.update(split_child)
+            outline = _modern_palette_value(palette, "shadow") or _modern_palette_value(palette, "primary") or "#251B2F"
+            if _hex_luminance(outline) > 0.35:
+                outline = "#251B2F"
+            if not _clean_hex(child.get("stroke"), "") or float(child.get("strokeWidth") or 0) < 1.8:
+                child["stroke"] = outline
+                child["strokeWidth"] = 2.6 if _font_kind(str(child.get("fontFamily") or "")) == "script" else 2.2
+            if not _clean_hex(child.get("shadowColor"), ""):
+                child["shadowColor"] = outline
+                child["shadowBlur"] = 0
+                child["shadowOffsetX"] = 2.8
+                child["shadowOffsetY"] = 3.2
 
     return designed, str(palette["name"]), effect_name
 
@@ -3595,6 +3764,97 @@ def _draw_text_with_spacing(
         x += draw.textlength(ch, font=font) + spacing
 
 
+def _draw_text_mask_with_spacing(
+    mask: Image.Image,
+    xy: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    spacing: float,
+) -> None:
+    draw = ImageDraw.Draw(mask)
+    x, y = xy
+    for ch in text:
+        draw.text((x, y), ch, font=font, fill=255)
+        x += draw.textlength(ch, font=font) + spacing
+
+
+def _interpolate_hex_color(start: str, end: str, amount: float) -> tuple[int, int, int, int]:
+    start_hex = _clean_hex(start, "#000000").lstrip("#")
+    end_hex = _clean_hex(end, "#000000").lstrip("#")
+    amount = float(_clamp_number(amount, 0, 0, 1))
+    channels = []
+    for index in (0, 2, 4):
+        a = int(start_hex[index:index + 2], 16)
+        b = int(end_hex[index:index + 2], 16)
+        channels.append(int(round(a + (b - a) * amount)))
+    return channels[0], channels[1], channels[2], 255
+
+
+def _gradient_color_at(stops: list[dict[str, Any]], offset: float) -> tuple[int, int, int, int]:
+    if not stops:
+        return 17, 17, 17, 255
+    offset = float(_clamp_number(offset, 0, 0, 1))
+    previous = stops[0]
+    for current in stops[1:]:
+        current_offset = float(current["offset"])
+        previous_offset = float(previous["offset"])
+        if offset <= current_offset:
+            span = max(current_offset - previous_offset, 0.0001)
+            amount = (offset - previous_offset) / span
+            return _interpolate_hex_color(str(previous["color"]), str(current["color"]), amount)
+        previous = current
+    return _interpolate_hex_color(str(stops[-1]["color"]), str(stops[-1]["color"]), 0)
+
+
+def _gradient_image_for_bbox(
+    size: tuple[int, int],
+    bbox: tuple[int, int, int, int],
+    gradient: dict[str, Any],
+) -> Image.Image:
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    left, top, right, bottom = bbox
+    width = max(right - left, 1)
+    height = max(bottom - top, 1)
+    direction = str(gradient.get("direction") or "vertical").lower()
+    stops = gradient.get("stops") if isinstance(gradient.get("stops"), list) else []
+    pixels = layer.load()
+    for y in range(top, bottom):
+        for x in range(left, right):
+            offset = ((x - left) / width) if direction == "horizontal" else ((y - top) / height)
+            pixels[x, y] = _gradient_color_at(stops, offset)
+    return layer
+
+
+def _draw_text_line_with_fill(
+    layer: Image.Image,
+    xy: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str,
+    spacing: float,
+    stroke: str,
+    stroke_width: float,
+    fill_gradient: dict[str, Any] | None = None,
+) -> None:
+    if not fill_gradient:
+        _draw_text_with_spacing(layer, xy, text, font, fill, spacing, stroke, stroke_width)
+        return
+
+    if stroke and stroke_width > 0:
+        stroke_layer = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+        _draw_text_with_spacing(stroke_layer, xy, text, font, stroke, spacing, stroke, stroke_width)
+        layer.alpha_composite(stroke_layer)
+
+    mask = Image.new("L", layer.size, 0)
+    _draw_text_mask_with_spacing(mask, xy, text, font, spacing)
+    bbox = mask.getbbox()
+    if not bbox:
+        return
+    gradient_layer = _gradient_image_for_bbox(layer.size, bbox, fill_gradient)
+    gradient_layer.putalpha(mask)
+    layer.alpha_composite(gradient_layer)
+
+
 def _modern_line_width(text: str, font: ImageFont.ImageFont, spacing: float) -> float:
     draw = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
     return _line_width(draw, text, font, spacing)
@@ -3726,6 +3986,7 @@ def _render_modern_preview_data_uri(
 
     family = obj.get("fontFamily", "Arial")
     fill = obj.get("fill") or "#111111"
+    fill_gradient = _normalize_fill_gradient(obj)
     stroke = obj.get("stroke") or ""
     accent = obj.get("accentFill") or fill
     shadow = obj.get("shadowColor") or ""
@@ -3836,6 +4097,7 @@ def _draw_text_object_on_layer(img: Image.Image, obj: dict[str, Any], scale: int
     box_w = float(obj.get("width", img.size[0] / scale)) * scale
     box_h = float(obj.get("height", img.size[1] / scale)) * scale
     fill = obj.get("fill") or "#111111"
+    fill_gradient = _normalize_fill_gradient(obj)
     stroke = obj.get("stroke") or ""
     stroke_width = float(obj.get("strokeWidth") or 0) * scale
     shadow = obj.get("shadowColor") or ""
@@ -3896,7 +4158,7 @@ def _draw_text_object_on_layer(img: Image.Image, obj: dict[str, Any], scale: int
 
     text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     for line, x, y, _ in positions:
-        _draw_text_with_spacing(text_layer, (x, y), line, font, fill, letter_spacing, stroke, stroke_width)
+        _draw_text_line_with_fill(text_layer, (x, y), line, font, fill, letter_spacing, stroke, stroke_width, fill_gradient)
     target.alpha_composite(text_layer)
 
     decoration = str(obj.get("textDecoration") or "").lower()
@@ -3960,6 +4222,7 @@ def render_preview_data_uri(text_obj: dict[str, Any], canvas_width: int = DEFAUL
     box_h = float(obj.get("height", canvas_height)) * scale
     safe_box_w = max(min(box_w, width - 72 * scale), 1)
     fill = obj.get("fill") or "#111111"
+    fill_gradient = _normalize_fill_gradient(obj)
     stroke = obj.get("stroke") or ""
     stroke_width = float(obj.get("strokeWidth") or 0) * scale
     shadow = obj.get("shadowColor") or ""
@@ -4014,7 +4277,7 @@ def render_preview_data_uri(text_obj: dict[str, Any], canvas_width: int = DEFAUL
 
     text_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     for line, x, y, _ in text_positions:
-        _draw_text_with_spacing(text_layer, (x, y), line, font, fill, letter_spacing, stroke, stroke_width)
+        _draw_text_line_with_fill(text_layer, (x, y), line, font, fill, letter_spacing, stroke, stroke_width, fill_gradient)
     img.alpha_composite(text_layer)
 
     decoration = str(obj.get("textDecoration") or "").lower()
@@ -4293,6 +4556,32 @@ def _fabric_char_spacing(text_obj: dict[str, Any]) -> float:
     return round((float(text_obj.get("letterSpacing") or 0) / font_size) * 1000, 3)
 
 
+def _fabric_fill(text_obj: dict[str, Any]) -> Any:
+    gradient = _normalize_fill_gradient(text_obj)
+    if not gradient:
+        return _clean_hex(text_obj.get("fill"), "#111111")
+    width = max(float(text_obj.get("width") or 0), 1.0)
+    height = max(float(text_obj.get("height") or 0), 1.0)
+    horizontal = gradient.get("direction") == "horizontal"
+    return {
+        "type": "linear",
+        "coords": {
+            "x1": 0,
+            "y1": 0,
+            "x2": width if horizontal else 0,
+            "y2": 0 if horizontal else height,
+        },
+        "colorStops": [
+            {
+                "offset": float(stop["offset"]),
+                "color": str(stop["color"]),
+                "opacity": 1,
+            }
+            for stop in gradient["stops"]
+        ],
+    }
+
+
 def _fabric_text_object(text_obj: dict[str, Any]) -> dict[str, Any]:
     decoration = str(text_obj.get("textDecoration") or "").strip().lower()
     shadow = _fabric_shadow(text_obj)
@@ -4305,7 +4594,7 @@ def _fabric_text_object(text_obj: dict[str, Any]) -> dict[str, Any]:
         "top": float(text_obj.get("y") or 0),
         "width": float(text_obj.get("width") or 0),
         "height": float(text_obj.get("height") or 0),
-        "fill": _clean_hex(text_obj.get("fill"), "#111111"),
+        "fill": _fabric_fill(text_obj),
         "stroke": _clean_hex(text_obj.get("stroke"), "") or None,
         "strokeWidth": float(text_obj.get("strokeWidth") or 0),
         "strokeDashArray": None,
@@ -4417,6 +4706,7 @@ def _canvas_text_element(text_obj: dict[str, Any], z_index: int) -> dict[str, An
     decoration = str(text_obj.get("textDecoration") or "").strip().lower()
     stroke = _clean_hex(text_obj.get("stroke"), "")
     align = str(text_obj.get("textAlign") or text_obj.get("align") or "center")
+    gradient = _normalize_fill_gradient(text_obj)
     return {
         "id": str(text_obj.get("id") or f"text_{z_index}"),
         "type": "text",
@@ -4439,6 +4729,7 @@ def _canvas_text_element(text_obj: dict[str, Any], z_index: int) -> dict[str, An
             "css": _canvas_font_css(text_obj),
         },
         "fillStyle": _clean_hex(text_obj.get("fill"), "#111111"),
+        "fillGradient": gradient,
         "strokeStyle": stroke or None,
         "lineWidth": float(text_obj.get("strokeWidth") or 0) if stroke else 0,
         "textAlign": align,
@@ -4497,6 +4788,7 @@ def _canva_text_element(text_obj: dict[str, Any], z_index: int) -> dict[str, Any
     decoration = str(text_obj.get("textDecoration") or "").strip().lower()
     stroke = _clean_hex(text_obj.get("stroke"), "")
     shadow = _canva_shadow(text_obj)
+    gradient = _normalize_fill_gradient(text_obj)
     return {
         "id": str(text_obj.get("id") or f"text_{z_index}"),
         "type": "text",
@@ -4521,6 +4813,7 @@ def _canva_text_element(text_obj: dict[str, Any], z_index: int) -> dict[str, Any
             "fontWeight": str(text_obj.get("fontWeight") or "normal"),
             "fontStyle": str(text_obj.get("fontStyle") or "normal"),
             "color": _clean_hex(text_obj.get("fill"), "#111111"),
+            "gradient": gradient,
             "textAlign": str(text_obj.get("textAlign") or text_obj.get("align") or "center"),
             "lineHeight": float(text_obj.get("lineHeight") or 1),
             "letterSpacing": float(text_obj.get("letterSpacing") or 0),
