@@ -2,6 +2,7 @@ from magic_write import MagicWriteModel
 import json
 
 model = MagicWriteModel()
+
 result = model.generate(
     "Sparkle",
     count=12,
